@@ -37,11 +37,8 @@ static ImapResult imap_auth_login(ImapMboxHandle* handle);
 
 typedef ImapResult (*ImapAuthenticator)(ImapMboxHandle* handle);
 
-/* ordered from strongest to weakest. Auth anonymous does not really
- * belong here, does it? */
+/* User name/password methods, ordered from strongest to weakest. */
 static ImapAuthenticator imap_authenticators_arr[] = {
-  imap_auth_anonymous, /* will be tried only if enabled */
-  imap_auth_gssapi,
   imap_auth_cram,
   imap_auth_plain,
   imap_auth_login, /* login is deprecated */
@@ -59,16 +56,28 @@ imap_authenticate(ImapMboxHandle* handle)
   if (imap_mbox_is_authenticated(handle) || imap_mbox_is_selected(handle))
     return IMAP_SUCCESS;
 
-  for(authenticator = imap_authenticators_arr;
-      *authenticator; authenticator++) {
-    if ((r = (*authenticator)(handle)) 
-        != IMAP_AUTH_UNAVAIL) {
-      if (r == IMAP_SUCCESS)
-	imap_mbox_handle_set_state(handle, IMHS_AUTHENTICATED);
-      return r;
-    }
+  if ((handle->auth_mode & NET_CLIENT_AUTH_OAUTH2) != 0U) {
+	  /* FIXME!! */
   }
-  imap_mbox_handle_set_msg(handle, _("No way to authenticate is known"));
+
+  if ((r != IMAP_SUCCESS) && (handle->auth_mode & NET_CLIENT_AUTH_KERBEROS) != 0U) {
+	  r = imap_auth_gssapi(handle);
+  }
+
+  if ((r != IMAP_SUCCESS) && (handle->auth_mode & NET_CLIENT_AUTH_ANONYMOUS) != 0U) {
+	  r = imap_auth_anonymous(handle);
+  }
+
+  for (authenticator = imap_authenticators_arr; (r != IMAP_SUCCESS) && *authenticator; authenticator++) {
+	  r = (*authenticator)(handle);
+	  if (r == IMAP_SUCCESS) {
+		  imap_mbox_handle_set_state(handle, IMHS_AUTHENTICATED);
+	  }
+  }
+
+  if (r != IMAP_SUCCESS) {
+	  imap_mbox_handle_set_msg(handle, _("No way to authenticate is known"));
+  }
   return r;
 }
 
@@ -223,8 +232,6 @@ getmsg_anonymous(ImapMboxHandle *h, char **retmsg, int *retmsglen)
 static ImapResult
 imap_auth_anonymous(ImapMboxHandle* handle)
 {
-  if(!handle->enable_anonymous)
-    return IMAP_AUTH_UNAVAIL;
   return imap_auth_sasl(handle, IMCAP_AANONYMOUS, "AUTHENTICATE ANONYMOUS",
 			getmsg_anonymous);
 }

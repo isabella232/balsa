@@ -25,11 +25,47 @@ struct _NetClientPop {
 
 	NetClientCryptMode crypt_mode;
 	gchar *apop_banner;
-	guint auth_allowed[2];			/** 0: encrypted, 1: unencrypted */
+	guint auth_enabled;
 	gboolean can_pipelining;
 	gboolean can_uidl;
 	gboolean use_pipelining;
 };
+
+
+/** @name POP authentication methods
+ *
+ * Note that the availability of these authentication methods depends upon the result of the CAPABILITY list.  According to RFC
+ * 1939, Section 4, at least either APOP or USER/PASS @em must be supported.
+ * @{
+ */
+/** RFC 1939 "USER" and "PASS" authentication method. */
+#define NET_CLIENT_POP_AUTH_USER_PASS		0x01U
+/** RFC 1939 "APOP" authentication method. */
+#define NET_CLIENT_POP_AUTH_APOP			0x02U
+/** RFC 5034 SASL "LOGIN" authentication method. */
+#define NET_CLIENT_POP_AUTH_LOGIN			0x04U
+/** RFC 5034 SASL "PLAIN" authentication method. */
+#define NET_CLIENT_POP_AUTH_PLAIN			0x08U
+/** RFC 5034 SASL "CRAM-MD5" authentication method. */
+#define NET_CLIENT_POP_AUTH_CRAM_MD5		0x10U
+/** RFC 5034 SASL "CRAM-SHA1" authentication method. */
+#define NET_CLIENT_POP_AUTH_CRAM_SHA1		0x20U
+/** RFC 4752 "GSSAPI" authentication method. */
+#define NET_CLIENT_POP_AUTH_GSSAPI			0x40U
+/** RFC 6749 "XOAUTH2" authentication method. */
+#define NET_CLIENT_POP_AUTH_OAUTH2			0x80U
+
+/** Mask of all authentication methods requiring user name and password. */
+#define NET_CLIENT_POP_AUTH_PASSWORD		\
+	(NET_CLIENT_POP_AUTH_USER_PASS | NET_CLIENT_POP_AUTH_APOP | NET_CLIENT_POP_AUTH_LOGIN | NET_CLIENT_POP_AUTH_PLAIN | \
+	 NET_CLIENT_POP_AUTH_CRAM_MD5 | NET_CLIENT_POP_AUTH_CRAM_SHA1)
+
+/** Mask of all authentication methods. */
+#define NET_CLIENT_POP_AUTH_ALL				\
+	(NET_CLIENT_POP_AUTH_PASSWORD + NET_CLIENT_POP_AUTH_GSSAPI + NET_CLIENT_POP_AUTH_OAUTH2)
+/** Mask of all authentication methods which do not require a password (Note: OAuth2 requires the authentication token). */
+#define NET_CLIENT_POP_AUTH_NO_PWD			NET_CLIENT_POP_AUTH_GSSAPI
+/** @} */
 
 
 /* Note: the maximum line length of a message body downloaded from the POP3 server may be up to 998 chars, excluding the terminating
@@ -68,6 +104,7 @@ static gboolean net_client_pop_auth_apop(NetClientPop *client, const gchar* user
 static gboolean net_client_pop_auth_cram(NetClientPop *client, GChecksumType chksum_type, const gchar *user, const gchar *passwd,
 										  GError **error);
 static gboolean net_client_pop_auth_gssapi(NetClientPop *client, const gchar *user, GError **error);
+static gboolean net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar *access_token, GError **error);
 static gboolean net_client_pop_retr_msg(NetClientPop *client, const NetClientPopMessageInfo *info, NetClientPopMsgCb callback,
 										gpointer user_data, GError **error);
 
@@ -96,16 +133,127 @@ net_client_pop_new(const gchar *host, guint16 port, NetClientCryptMode crypt_mod
 
 
 gboolean
-net_client_pop_allow_auth(NetClientPop *client, gboolean encrypted, guint allow_auth)
+net_client_pop_probe(const gchar *host, guint timeout_secs, NetClientProbeResult *result, GCallback cert_cb, GError **error)
 {
+	guint16 probe_ports[] = {995U, 110U, 0U};		/* pop3s, pop3 */
+	gchar *host_only;
+	gchar *colon;
+	gboolean retval = FALSE;
+	gint check_id;
+
 	/* paranoia check */
-	g_return_val_if_fail(NET_IS_CLIENT_POP(client), FALSE);
-	if (encrypted) {
-		client->auth_allowed[0] = allow_auth;
-	} else {
-		client->auth_allowed[1] = allow_auth;
+	g_return_val_if_fail((host != NULL) && (result != NULL), FALSE);
+
+	host_only = g_strdup(host);
+	colon = strchr(host_only, ':');
+	if (colon != NULL) {
+		colon[0] = '\0';
 	}
-	return TRUE;
+
+	if (!net_client_host_reachable(host_only, error)) {
+		g_free(host_only);
+		return FALSE;
+	}
+
+	for (check_id = 0; !retval && (probe_ports[check_id] > 0U); check_id++) {
+		NetClientPop *client;
+
+		g_debug("%s: probing %s:%u…", __func__, host_only, probe_ports[check_id]);
+		client = net_client_pop_new(host_only, probe_ports[check_id], NET_CLIENT_CRYPT_NONE, FALSE);
+		net_client_set_timeout(NET_CLIENT(client), timeout_secs);
+		if (net_client_connect(NET_CLIENT(client), NULL)) {
+			gboolean this_success;
+			guint auth_supported = 0U;
+			gboolean can_starttls = FALSE;
+
+			if (cert_cb != NULL) {
+				g_signal_connect(client, "cert-check", cert_cb, client);
+			}
+			if (check_id == 0) {	/* pop3s */
+				this_success = net_client_start_tls(NET_CLIENT(client), NULL);
+			} else {
+				this_success = TRUE;
+			}
+
+			/* get the greeting */
+			if (this_success) {
+				this_success = net_client_pop_read_reply(client, NULL, error);
+			}
+
+			/* send CAPA and read the capabilities of the server */
+			if (this_success) {
+				net_client_pop_get_capa(client, &auth_supported);
+
+			}
+
+			/* try to perform STARTTLS unless we are already encrypted, and send CAPA again */
+			if (this_success && (check_id != 0)) {
+				can_starttls = net_client_pop_starttls(client, NULL);
+				if (can_starttls) {
+					net_client_pop_get_capa(client, &auth_supported);
+				}
+			}
+
+			/* evaluate on success */
+			if (this_success) {
+				result->port = probe_ports[check_id];
+
+				if (check_id == 0) {
+					result->crypt_mode = NET_CLIENT_CRYPT_ENCRYPTED;
+				} else if (can_starttls) {
+					result->crypt_mode = NET_CLIENT_CRYPT_STARTTLS;
+				} else {
+					result->crypt_mode = NET_CLIENT_CRYPT_NONE;
+				}
+
+				/* RFC 1939, Section 4, require at least either APOP or USER/PASS */
+				result->auth_mode = NET_CLIENT_AUTH_USER_PASS;
+				if ((auth_supported & NET_CLIENT_POP_AUTH_GSSAPI) != 0U) {
+					result->auth_mode |= NET_CLIENT_AUTH_KERBEROS;
+				}
+				if ((auth_supported & NET_CLIENT_POP_AUTH_OAUTH2) != 0U) {
+					result->auth_mode |= NET_CLIENT_AUTH_OAUTH2;
+				}
+				retval = TRUE;
+			}
+		}
+		g_object_unref(client);
+	}
+
+	if (!retval) {
+		g_set_error(error, NET_CLIENT_ERROR_QUARK, NET_CLIENT_PROBE_FAILED,
+			_("the server %s does not offer the POP3 service at port 995 or 110"), host_only);
+	}
+
+	g_free(host_only);
+
+	return retval;
+}
+
+
+gboolean
+net_client_pop_set_auth_mode(NetClientPop *client, NetClientAuthMode auth_mode, gboolean disable_apop)
+{
+	g_return_val_if_fail(NET_IS_CLIENT_POP(client), FALSE);
+
+	client->auth_enabled = 0U;
+	if ((auth_mode & NET_CLIENT_AUTH_USER_PASS) != 0U) {
+		client->auth_enabled |= NET_CLIENT_POP_AUTH_PASSWORD;
+		if (disable_apop) {
+			client->auth_enabled &= ~NET_CLIENT_POP_AUTH_APOP;
+		}
+	}
+#if defined(HAVE_GSSAPI)
+	if ((auth_mode & NET_CLIENT_AUTH_KERBEROS) != 0U) {
+		client->auth_enabled |= NET_CLIENT_POP_AUTH_GSSAPI;
+	}
+#endif
+#if defined (HAVE_OAUTH2)
+	if ((auth_mode & NET_CLIENT_AUTH_OAUTH2) != 0U) {
+		client->auth_enabled |= NET_CLIENT_POP_AUTH_OAUTH2;
+	}
+#endif
+	return (client->auth_enabled != 0U);
 }
 
 
@@ -182,20 +330,6 @@ net_client_pop_connect(NetClientPop *client, gchar **greeting, GError **error)
 			result = net_client_pop_auth(client, auth_data[0], auth_data[1], auth_supported, error);
 			net_client_free_authstr(auth_data[0]);
 			net_client_free_authstr(auth_data[1]);
-
-			/* if passwordless authentication failed, try again with password */
-			if (!result && !need_pwd) {
-				g_debug("passwordless authentication failed, retry w/ password: emit 'auth' signal for client %p", client);
-				g_clear_error(error);
-				g_free(auth_data);
-				g_signal_emit_by_name(client, "auth", TRUE, &auth_data);	/*lint !e730	passing a gboolean is intended here */
-				if ((auth_data != NULL) && (auth_data[0] != NULL)) {
-					result = net_client_pop_auth(client, auth_data[0], auth_data[1],
-						auth_supported & ~NET_CLIENT_POP_AUTH_NO_PWD, error);
-					net_client_free_authstr(auth_data[0]);
-					net_client_free_authstr(auth_data[1]);
-				}
-			}
 		}
 		g_free(auth_data);
 	}
@@ -399,8 +533,7 @@ net_client_pop_class_init(NetClientPopClass *klass)
 static void
 net_client_pop_init(NetClientPop *self)
 {
-	self->auth_allowed[0] = NET_CLIENT_POP_AUTH_ALL;
-	self->auth_allowed[1] = NET_CLIENT_POP_AUTH_SAFE;
+	self->auth_enabled = NET_CLIENT_POP_AUTH_ALL;
 }
 
 
@@ -498,11 +631,8 @@ net_client_pop_auth(NetClientPop *client, const gchar *user, const gchar *passwd
 	gboolean result = FALSE;
 	guint auth_mask;
 
-	if (net_client_is_encrypted(NET_CLIENT(client))) {
-		auth_mask = client->auth_allowed[0] & auth_supported;
-	} else {
-		auth_mask = client->auth_allowed[1] & auth_supported;
-	}
+	/* calculate the possible authentication methods */
+	auth_mask = client->auth_enabled & auth_supported;
 
 	if (auth_mask == 0U) {
 		g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH,
@@ -511,7 +641,9 @@ net_client_pop_auth(NetClientPop *client, const gchar *user, const gchar *passwd
 		g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH, _("password required"));
 	} else {
 		/* first try authentication methods w/o password, then safe ones, and finally the plain-text methods */
-		if ((auth_mask & NET_CLIENT_POP_AUTH_GSSAPI) != 0U) {
+		if ((auth_mask & NET_CLIENT_POP_AUTH_OAUTH2) != 0U) {
+			result = net_client_pop_auth_oauth2(client, user, passwd, error);
+		} else if ((auth_mask & NET_CLIENT_POP_AUTH_GSSAPI) != 0U) {
 			result = net_client_pop_auth_gssapi(client, user, error);
 		} else if ((auth_mask & NET_CLIENT_POP_AUTH_CRAM_SHA1) != 0U) {
 			result = net_client_pop_auth_cram(client, G_CHECKSUM_SHA1, user, passwd, error);
@@ -698,6 +830,40 @@ net_client_pop_auth_gssapi(NetClientPop G_GNUC_UNUSED *client, const gchar G_GNU
 #endif  /* HAVE_GSSAPI */
 
 
+#if defined(HAVE_OAUTH2)
+
+static gboolean
+net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar *access_token, GError **error)
+{
+	gboolean result ;
+	gchar *base64_buf;
+
+	base64_buf = net_client_auth_oauth2_calc(user, access_token);
+	if (base64_buf != NULL) {
+		result = net_client_pop_execute_sasl(client, "AUTH XOAUTH2", NULL, error);
+		if (result) {
+			result = net_client_pop_execute(client, "%s", NULL, error, base64_buf);
+			// FIXME - grab the JSON response on error
+		}
+		net_client_free_authstr(base64_buf);
+	} else {
+		result = FALSE;
+	}
+	return result;
+}
+
+#else
+
+static gboolean
+net_client_pop_auth_oauth2(NetClientPop G_GNUC_UNUSED *client, const gchar G_GNUC_UNUSED *user,
+	const gcharG_GNUC_UNUSED *access_token, GError G_GNUC_UNUSED **error)
+{
+	g_assert_not_reached();			/* this should never happen! */
+	return FALSE;					/* never reached, make gcc happy */
+}
+
+#endif  /* HAVE_OAUTH2 */
+
 /* Note: if supplied, challenge is never NULL on success */
 static gboolean
 net_client_pop_execute_sasl(NetClientPop *client, const gchar *request_fmt, gchar **challenge, GError **error, ...)
@@ -769,6 +935,10 @@ net_client_pop_get_capa(NetClientPop *client, guint *auth_supported)
 #if defined(HAVE_GSSAPI)
 					} else if (strcmp(auth[n], "GSSAPI") == 0) {
 						*auth_supported |= NET_CLIENT_POP_AUTH_GSSAPI;
+#endif
+#if defined(HAVE_OAUTH2)
+					} else if (strcmp(auth[n], "XOAUTH2") == 0) {
+						*auth_supported |= NET_CLIENT_POP_AUTH_OAUTH2;
 #endif
 					} else {
 						/* other auth methods are ignored for the time being */

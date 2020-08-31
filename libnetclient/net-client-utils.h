@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include <gio/gio.h>
+#include "net-client.h"
 
 
 G_BEGIN_DECLS
@@ -28,6 +29,25 @@ G_BEGIN_DECLS
 typedef struct _NetClientGssCtx NetClientGssCtx;
 
 #endif		/* HAVE_GSSAPI */
+
+
+typedef struct _NetClientProbeResult NetClientProbeResult;
+
+/** @brief Server probe results */
+struct _NetClientProbeResult {
+	guint16 port;							/**< The port where the server listens. */
+	NetClientCryptMode crypt_mode;			/**< The encryption mode the server supports for the returned port. */
+	NetClientAuthMode auth_mode;			/**< The authentication modes the server supports for the port and encryption mode. */
+};
+
+
+/** @brief Check is a host is resolvable and reachable
+ *
+ * @param host host name or IP address
+ * @param error filled with error information on error
+ * @return TRUE if the passed host name is resolvable and reachable
+ */
+gboolean net_client_host_reachable(const gchar *host, GError **error);
 
 
 /** @brief Calculate a CRAM authentication string
@@ -143,9 +163,27 @@ void net_client_gss_ctx_free(NetClientGssCtx *gss_ctx);
 #endif		/* HAVE_GSSAPI */
 
 
+#if defined(HAVE_OAUTH2)
+
+/** @brief Calculate a OAuth2 authentication string
+ *
+ * @param user user name
+ * @param access_token access token
+ * @return a newly allocated string containing the base64-encoded authentication
+ *
+ * This helper function calculates the the base64-encoded authentication string from the user name and the access token.  The caller
+ * shall free the returned string when it is not needed any more.
+ *
+ * \sa <a href="https://developers.google.com/gmail/imap/xoauth2-protocol">Google Developers: OAuth 2.0 Mechanism</a>.
+ */
+gchar *net_client_auth_oauth2_calc(const gchar *user, const gchar *access_token)
+	G_GNUC_MALLOC;
+
+#endif		/* HAVE_OAUTH2 */
+
 /** @file
  *
- * This module implements authentication-related helper functions for the network client library.
+ * This module implements probing and authentication-related helper functions for the network client library.
  */
 
 

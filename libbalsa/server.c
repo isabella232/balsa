@@ -71,7 +71,7 @@ struct _LibBalsaServerPrivate {
     gchar *cert_passphrase;
     gboolean remember_passwd;
     gboolean remember_cert_passphrase;
-    gboolean try_anonymous; /* user wants anonymous access */
+    NetClientAuthMode auth_mode;
 };
 
 static void libbalsa_server_finalize(GObject * object);
@@ -288,6 +288,7 @@ libbalsa_server_load_security_config(LibBalsaServer *server)
         want_ssl = libbalsa_conf_get_bool_with_default("SSL", &not_found);
         if (want_ssl && !not_found) {
         	priv->security = NET_CLIENT_CRYPT_ENCRYPTED;
+        	libbalsa_conf_clean_key("SSL");
         } else {
         	int want_tls;
 
@@ -305,10 +306,10 @@ libbalsa_server_load_security_config(LibBalsaServer *server)
         		default:
         			priv->security = NET_CLIENT_CRYPT_STARTTLS;
         		}
+            	libbalsa_conf_clean_key("SSL");
         	}
         }
     }
-
 }
 
 
@@ -444,7 +445,13 @@ libbalsa_server_load_config(LibBalsaServer * server)
         priv->user = g_strdup(g_get_user_name());
     }
 
-    priv->try_anonymous = libbalsa_conf_get_bool("Anonymous=false");
+	priv->auth_mode = libbalsa_conf_get_int("AuthMode=2");  /* default NET_CLIENT_AUTH_USER_PASS */
+    if (libbalsa_conf_has_key("Anonymous")) {
+    	if (libbalsa_conf_get_bool("Anonymous")) {
+    		priv->auth_mode = NET_CLIENT_AUTH_ANONYMOUS;
+    	}
+    	libbalsa_conf_clean_key("Anonymous");
+    }
     priv->remember_passwd = libbalsa_conf_get_bool("RememberPasswd=false");
 
     priv->passwd = libbalsa_free_password(priv->passwd);
@@ -490,7 +497,7 @@ libbalsa_server_save_config(LibBalsaServer * server)
 
     libbalsa_conf_set_string("Server", priv->host);
     libbalsa_conf_private_set_string("Username", priv->user, FALSE);
-    libbalsa_conf_set_bool("Anonymous",          priv->try_anonymous);
+    libbalsa_conf_set_int("AuthMode", priv->auth_mode);
 
     if (priv->remember_passwd && (priv->passwd != NULL)) {
         libbalsa_conf_set_bool("RememberPasswd", TRUE);
@@ -556,7 +563,7 @@ libbalsa_server_get_auth(NetClient *client,
 
     g_debug("%s: %p %p: encrypted = %d", __func__, client, user_data,
             net_client_is_encrypted(client));
-    if (!priv->try_anonymous || (strcmp(priv->protocol, "imap") == 0)) {
+    if (priv->auth_mode != NET_CLIENT_AUTH_ANONYMOUS) {
         result = g_new0(gchar *, 3U);
         result[0] = g_strdup(priv->user);
         if (need_passwd) {
@@ -735,14 +742,14 @@ libbalsa_server_get_security(LibBalsaServer *server)
     return priv->security;
 }
 
-gboolean
-libbalsa_server_get_try_anonymous(LibBalsaServer *server)
+NetClientAuthMode
+libbalsa_server_get_auth_mode(LibBalsaServer *server)
 {
     LibBalsaServerPrivate *priv = libbalsa_server_get_instance_private(server);
 
-    g_return_val_if_fail(LIBBALSA_IS_SERVER(server), FALSE);
+    g_return_val_if_fail(LIBBALSA_IS_SERVER(server), (NetClientAuthMode) 0);
 
-    return priv->try_anonymous;
+    return priv->auth_mode;
 }
 
 gboolean
@@ -813,13 +820,13 @@ libbalsa_server_set_security(LibBalsaServer *server, NetClientCryptMode security
 }
 
 void
-libbalsa_server_set_try_anonymous(LibBalsaServer *server, gboolean try_anonymous)
+libbalsa_server_set_auth_mode(LibBalsaServer *server, NetClientAuthMode auth_mode)
 {
     LibBalsaServerPrivate *priv = libbalsa_server_get_instance_private(server);
 
     g_return_if_fail(LIBBALSA_IS_SERVER(server));
 
-    priv->try_anonymous = try_anonymous;
+    priv->auth_mode = auth_mode;
 }
 
 void

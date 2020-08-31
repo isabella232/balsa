@@ -38,6 +38,7 @@ struct _NetClientClass {
 
 typedef enum _NetClientError NetClientError;
 typedef enum _NetClientCryptMode NetClientCryptMode;
+typedef enum _NetClientAuthMode NetClientAuthMode;
 
 
 /** @brief Encryption mode */
@@ -46,6 +47,15 @@ enum _NetClientCryptMode {
 	NET_CLIENT_CRYPT_STARTTLS,				/**< Protocol-specific STARTTLS encryption required. */
 	NET_CLIENT_CRYPT_STARTTLS_OPT,			/**< Optional protocol-specific STARTTLS encryption, proceed unencrypted on fail. */
 	NET_CLIENT_CRYPT_NONE					/**< Unencrypted connection. */
+};
+
+
+/** @brief Authentication mode */
+enum _NetClientAuthMode {
+	NET_CLIENT_AUTH_ANONYMOUS = 1,			/**< No authentication required (e.g. local service, user cert authentication). */
+	NET_CLIENT_AUTH_USER_PASS = 2,			/**< Authenticate with user name and password. */
+	NET_CLIENT_AUTH_KERBEROS = 4,			/**< Authenticate with user name and Kerberos ticket. */
+	NET_CLIENT_AUTH_OAUTH2 = 8				/**< OAuth2 authentication (RFC 6749). */
 };
 
 
@@ -59,7 +69,8 @@ enum _NetClientError {
 	NET_CLIENT_ERROR_LINE_TOO_LONG,			/**< The line is too long. */
 	NET_CLIENT_ERROR_GNUTLS,				/**< A GnuTLS error occurred (bad certificate or key data, or internal error). */
 	NET_CLIENT_ERROR_CERT_KEY_PASS,			/**< GnuTLS could not decrypt the user certificate's private key. */
-	NET_CLIENT_ERROR_GSSAPI					/**< A GSSAPI error occurred. */
+	NET_CLIENT_ERROR_GSSAPI,				/**< A GSSAPI error occurred. */
+	NET_CLIENT_PROBE_FAILED					/**< Probing a server failed. */
 };
 
 
@@ -335,8 +346,9 @@ gboolean net_client_can_read(NetClient *client);
  *   @code gchar **get_auth(NetClient *client, gboolean need_passwd, gpointer user_data) @endcode Authentication is required by the
  *   remote server.  The signal handler shall return a NULL-terminated array of strings, containing the user name in the first and
  *   the password in the second element.  If the parameter @em need_passwd is FALSE, no password is required (e.g. for kerberos
- *   ticket-based authentication).  In this case, the password element must be present in the reply, but it is ignored an may be
- *   NULL.  The strings are wiped and freed when they are not needed any more.  Return NULL if no authentication is required.
+ *   ticket-based or for OAuth2 authentication).  In this case, the password element must be present in the reply, but it is ignored
+ *   an may be NULL.  The strings are wiped and freed when they are not needed any more.  Return NULL if no authentication is
+ *   required.
  */
 
 
