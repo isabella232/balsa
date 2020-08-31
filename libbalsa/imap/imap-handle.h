@@ -20,6 +20,7 @@
 #include <glib.h>
 
 #include "net-client.h"
+#include "net-client-utils.h"
 #include "libimap.h"
 
 typedef enum {
@@ -61,6 +62,7 @@ typedef enum
   IMCAP_ACRAM_MD5,		/* RFC 2195: CRAM-MD5 authentication */
   IMCAP_AGSSAPI,		/* RFC 1731: GSSAPI authentication */
   IMCAP_APLAIN,                 /* RFC 2595: */
+  IMCAP_AOAUTH2,				/* RFC 6749: OAUTH2 authentication */
   IMCAP_ACL,			/* RFC 2086: IMAP4 ACL extension */
   IMCAP_RIGHTS,                 /* RFC 4314: IMAP4 RIGHTS= extension */
   IMCAP_BINARY,                 /* RFC 3516 */
@@ -88,7 +90,6 @@ typedef enum
 } ImapCapability;
 
 typedef enum {
-  IMAP_OPT_ANONYMOUS,   /**< try anonymous authentication */
   IMAP_OPT_CLIENT_SORT, /**< allow client-side sorting */
   IMAP_OPT_BINARY,      /**< enable binary=no-transfer-encoding msg transfer */
   IMAP_OPT_IDLE,        /**< enable IDLE */
@@ -135,6 +136,7 @@ ImapResult imap_mbox_handle_reconnect(ImapMboxHandle* r,
 void imap_handle_force_disconnect(ImapMboxHandle *h);
 
 NetClientCryptMode imap_handle_set_tls_mode(ImapMboxHandle *h, NetClientCryptMode option);
+NetClientAuthMode imap_handle_set_auth_mode(ImapMboxHandle *h, NetClientAuthMode mode);
 
 /* int below is a boolean */
 int      imap_mbox_handle_can_do(ImapMboxHandle* handle, ImapCapability cap);
@@ -213,5 +215,7 @@ unsigned mbox_view_get_rev_no(MboxView *mv, unsigned seqno);
 const char *mbox_view_get_str(MboxView *mv);
 
 /* ================ END OF MBOX_VIEW FUNCTIONS ========================= */
+
+gboolean imap_server_probe(const gchar *host, guint timeout_secs, NetClientProbeResult *result, GCallback cert_cb, GError **error);
 
 #endif

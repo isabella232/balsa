@@ -26,6 +26,24 @@
 #endif		/* HAVE_GSSAPI */
 
 
+gboolean
+net_client_host_reachable(const gchar *host, GError **error)
+{
+	GSocketConnectable *remote_address;
+	GNetworkMonitor *monitor;
+	gboolean success;
+
+	g_return_val_if_fail(host != NULL, FALSE);
+
+	remote_address = g_network_address_new(host, 1024U);
+	monitor = g_network_monitor_get_default();
+	success = g_network_monitor_can_reach(monitor, remote_address, NULL, error);
+	g_object_unref(remote_address);
+
+	return success;
+}
+
+
 #if defined(HAVE_GSSAPI)
 
 struct _NetClientGssCtx {
@@ -137,7 +155,7 @@ net_client_gss_ctx_new(const gchar *service, const gchar *host, const gchar *use
     OM_uint32 maj_stat;
     OM_uint32 min_stat;
 
-    g_return_val_if_fail((service != NULL) && (host != NULL), NULL);
+    g_return_val_if_fail((service != NULL) && (host != NULL) && (user != NULL), NULL);
 
 	gss_ctx = g_new0(NetClientGssCtx, 1U);
 	service_str = g_strconcat(service, "@", host, NULL);
@@ -333,3 +351,21 @@ gss_error_string(OM_uint32 err_maj, OM_uint32 err_min)
 }
 
 #endif		/* HAVE_GSSAPI */
+
+
+#if defined(HAVE_OAUTH2)
+
+gchar *
+net_client_auth_oauth2_calc(const gchar *user, const gchar *access_token)
+{
+	gchar *buffer;
+	gchar *result;
+
+	g_return_val_if_fail((user != NULL) && (access_token != NULL), NULL);
+	buffer = g_strdup_printf("user=%s\001auth=Bearer %s\001\001", user, access_token);
+	result = g_base64_encode(buffer, strlen(buffer));
+	g_free(buffer);
+	return result;
+}
+
+#endif      /* HAVE_OAUTH2 */
