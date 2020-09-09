@@ -30,6 +30,12 @@
 #include "server-config.h"
 
 
+#ifdef G_LOG_DOMAIN
+#  undef G_LOG_DOMAIN
+#endif
+#define G_LOG_DOMAIN "libbalsa-server"
+
+
 struct _LibBalsaServerCfg {
         GtkNotebook parent;
 
@@ -416,7 +422,9 @@ server_cfg_auth_widget(LibBalsaServer *server)
     gchar id_buf[8];
 
     protocol = libbalsa_server_get_protocol(server);
-    if ((strcmp(protocol, "smtp") == 0) || (strcmp(protocol, "imap") == 0)) {
+    if ((strcmp(protocol, "pop3") == 0) || (strcmp(protocol, "imap") == 0)) {
+    	gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo_box), "1", _("anonymous access"));		/* RFC 4505 */
+    } else {
     	gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo_box), "1", _("none required"));
     }
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo_box), "2", _("user name and pass phrase"));
@@ -455,12 +463,12 @@ on_server_cfg_changed(GtkWidget *widget, LibBalsaServerCfg *server_cfg)
 	} else {
 		auth_mode = 0;
 	}
-	gtk_widget_set_sensitive(server_cfg->username, auth_mode != NET_CLIENT_AUTH_ANONYMOUS);
+	gtk_widget_set_sensitive(server_cfg->username, auth_mode != NET_CLIENT_AUTH_NONE_ANON);
 	gtk_widget_set_sensitive(server_cfg->password, auth_mode == NET_CLIENT_AUTH_USER_PASS);
 	gtk_widget_set_sensitive(server_cfg->remember_pass, auth_mode == NET_CLIENT_AUTH_USER_PASS);
 
 	/* invalid configuration if authentication is required, but no user name given */
-	if ((auth_mode != NET_CLIENT_AUTH_ANONYMOUS) && (*gtk_entry_get_text(GTK_ENTRY(server_cfg->username)) == '\0')) {
+	if ((auth_mode != NET_CLIENT_AUTH_NONE_ANON) && (*gtk_entry_get_text(GTK_ENTRY(server_cfg->username)) == '\0')) {
 		server_cfg->cfg_valid = FALSE;
 	}
 
@@ -528,7 +536,7 @@ on_server_probe(GtkWidget *widget, LibBalsaServerCfg *server_cfg)
 			probe_res.auth_mode = NET_CLIENT_AUTH_USER_PASS;
 		} else {
 			auth_str = _("none");
-			probe_res.auth_mode = NET_CLIENT_AUTH_ANONYMOUS;
+			probe_res.auth_mode = NET_CLIENT_AUTH_NONE_ANON;
 		}
 		msgdlg = gtk_message_dialog_new(NULL,
 			GTK_DIALOG_DESTROY_WITH_PARENT | libbalsa_dialog_flags(),

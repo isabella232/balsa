@@ -39,21 +39,24 @@ struct _NetClientPop {
  * @{
  */
 /** RFC 1939 "USER" and "PASS" authentication method. */
-#define NET_CLIENT_POP_AUTH_USER_PASS		0x01U
+#define NET_CLIENT_POP_AUTH_USER_PASS		0x001U
 /** RFC 1939 "APOP" authentication method. */
-#define NET_CLIENT_POP_AUTH_APOP			0x02U
+#define NET_CLIENT_POP_AUTH_APOP			0x002U
 /** RFC 5034 SASL "LOGIN" authentication method. */
-#define NET_CLIENT_POP_AUTH_LOGIN			0x04U
+#define NET_CLIENT_POP_AUTH_LOGIN			0x004U
 /** RFC 5034 SASL "PLAIN" authentication method. */
-#define NET_CLIENT_POP_AUTH_PLAIN			0x08U
+#define NET_CLIENT_POP_AUTH_PLAIN			0x008U
 /** RFC 5034 SASL "CRAM-MD5" authentication method. */
-#define NET_CLIENT_POP_AUTH_CRAM_MD5		0x10U
+#define NET_CLIENT_POP_AUTH_CRAM_MD5		0x010U
 /** RFC 5034 SASL "CRAM-SHA1" authentication method. */
-#define NET_CLIENT_POP_AUTH_CRAM_SHA1		0x20U
+#define NET_CLIENT_POP_AUTH_CRAM_SHA1		0x020U
 /** RFC 4752 "GSSAPI" authentication method. */
-#define NET_CLIENT_POP_AUTH_GSSAPI			0x40U
+#define NET_CLIENT_POP_AUTH_GSSAPI			0x040U
 /** RFC 6749 "XOAUTH2" authentication method. */
-#define NET_CLIENT_POP_AUTH_OAUTH2			0x80U
+#define NET_CLIENT_POP_AUTH_OAUTH2			0x080U
+/** RFC 4505 "ANONYMOUS" authentication method. */
+#define NET_CLIENT_POP_AUTH_ANONYMOUS		0x100U
+
 
 /** Mask of all authentication methods requiring user name and password. */
 #define NET_CLIENT_POP_AUTH_PASSWORD		\
@@ -62,9 +65,7 @@ struct _NetClientPop {
 
 /** Mask of all authentication methods. */
 #define NET_CLIENT_POP_AUTH_ALL				\
-	(NET_CLIENT_POP_AUTH_PASSWORD + NET_CLIENT_POP_AUTH_GSSAPI + NET_CLIENT_POP_AUTH_OAUTH2)
-/** Mask of all authentication methods which do not require a password (Note: OAuth2 requires the authentication token). */
-#define NET_CLIENT_POP_AUTH_NO_PWD			NET_CLIENT_POP_AUTH_GSSAPI
+	(NET_CLIENT_POP_AUTH_PASSWORD + NET_CLIENT_POP_AUTH_GSSAPI + NET_CLIENT_POP_AUTH_OAUTH2 + NET_CLIENT_POP_AUTH_ANONYMOUS)
 /** @} */
 
 
@@ -95,10 +96,10 @@ static gboolean net_client_pop_starttls(NetClientPop *client, GError **error);
 static gboolean net_client_pop_execute(NetClientPop *client, const gchar *request_fmt, gchar **last_reply, GError **error, ...)
 	G_GNUC_PRINTF(2, 5);
 static gboolean net_client_pop_execute_sasl(NetClientPop *client, const gchar *request_fmt, gchar **challenge, GError **error, ...);
-static gboolean net_client_pop_auth(NetClientPop *client, const gchar *user, const gchar *passwd, guint auth_supported,
-									GError **error);
+static gboolean net_client_pop_auth(NetClientPop *client, guint auth_supported, GError **error);
 static gboolean net_client_pop_auth_plain(NetClientPop *client, const gchar* user, const gchar* passwd, GError** error);
 static gboolean net_client_pop_auth_login(NetClientPop *client, const gchar *user, const gchar *passwd, GError **error);
+static gboolean net_client_pop_auth_anonymous(NetClientPop *client, GError **error);
 static gboolean net_client_pop_auth_user_pass(NetClientPop *client, const gchar* user, const gchar* passwd, GError** error);
 static gboolean net_client_pop_auth_apop(NetClientPop *client, const gchar* user, const gchar* passwd, GError** error);
 static gboolean net_client_pop_auth_cram(NetClientPop *client, GChecksumType chksum_type, const gchar *user, const gchar *passwd,
@@ -237,6 +238,9 @@ net_client_pop_set_auth_mode(NetClientPop *client, NetClientAuthMode auth_mode, 
 	g_return_val_if_fail(NET_IS_CLIENT_POP(client), FALSE);
 
 	client->auth_enabled = 0U;
+	if ((auth_mode & NET_CLIENT_AUTH_NONE_ANON) != 0U) {
+		client->auth_enabled |= NET_CLIENT_POP_AUTH_ANONYMOUS;
+	}
 	if ((auth_mode & NET_CLIENT_AUTH_USER_PASS) != 0U) {
 		client->auth_enabled |= NET_CLIENT_POP_AUTH_PASSWORD;
 		if (disable_apop) {
@@ -319,19 +323,7 @@ net_client_pop_connect(NetClientPop *client, gchar **greeting, GError **error)
 
 	/* authenticate if we were successful so far */
 	if (result) {
-		gchar **auth_data;
-		gboolean need_pwd;
-
-		auth_data = NULL;
-		need_pwd = (auth_supported & NET_CLIENT_POP_AUTH_NO_PWD) == 0U;
-		g_debug("emit 'auth' signal for client %p, need pwd %d", client, need_pwd);
-		g_signal_emit_by_name(client, "auth", need_pwd, &auth_data);
-		if ((auth_data != NULL) && (auth_data[0] != NULL)) {
-			result = net_client_pop_auth(client, auth_data[0], auth_data[1], auth_supported, error);
-			net_client_free_authstr(auth_data[0]);
-			net_client_free_authstr(auth_data[1]);
-		}
-		g_free(auth_data);
+		result = net_client_pop_auth(client, auth_supported, error);
 	}
 
 	return result;
@@ -626,46 +618,78 @@ net_client_pop_starttls(NetClientPop *client, GError **error)
 
 
 static gboolean
-net_client_pop_auth(NetClientPop *client, const gchar *user, const gchar *passwd, guint auth_supported, GError **error)
+net_client_pop_auth(NetClientPop *client, guint auth_supported, GError **error)
 {
 	gboolean result = FALSE;
 	guint auth_mask;
+	gchar **auth_data = NULL;
 
 	/* calculate the possible authentication methods */
 	auth_mask = client->auth_enabled & auth_supported;
 
+	/* try, in this order, enabled modes: anonymous; GSSAPI/Kerberos; OAuth2; user name and password */
 	if (auth_mask == 0U) {
 		g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH,
 			_("no suitable authentication mechanism"));
-	} else if (((auth_mask & NET_CLIENT_POP_AUTH_NO_PWD) == 0U) && (passwd == NULL)) {
-		g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH, _("password required"));
-	} else {
-		/* first try authentication methods w/o password, then safe ones, and finally the plain-text methods */
-		if ((auth_mask & NET_CLIENT_POP_AUTH_OAUTH2) != 0U) {
-			result = net_client_pop_auth_oauth2(client, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_POP_AUTH_GSSAPI) != 0U) {
-			result = net_client_pop_auth_gssapi(client, user, error);
-		} else if ((auth_mask & NET_CLIENT_POP_AUTH_CRAM_SHA1) != 0U) {
-			result = net_client_pop_auth_cram(client, G_CHECKSUM_SHA1, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_POP_AUTH_CRAM_MD5) != 0U) {
-			result = net_client_pop_auth_cram(client, G_CHECKSUM_MD5, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_POP_AUTH_APOP) != 0U) {
-			result = net_client_pop_auth_apop(client, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_POP_AUTH_PLAIN) != 0U) {
-			result = net_client_pop_auth_plain(client, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_POP_AUTH_USER_PASS) != 0U) {
-			result = net_client_pop_auth_user_pass(client, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_POP_AUTH_LOGIN) != 0U) {
-			result = net_client_pop_auth_login(client, user, passwd, error);
+	} else if ((auth_mask & NET_CLIENT_POP_AUTH_ANONYMOUS) != 0U) {
+		/* Anonymous authentication - nothing required */
+		result = net_client_pop_auth_anonymous(client, error);
+	} else if ((auth_mask & NET_CLIENT_POP_AUTH_GSSAPI) != 0U) {
+		/* GSSAPI aka Kerberos authentication - user name required */
+		g_signal_emit_by_name(client, "auth", NET_CLIENT_AUTH_KERBEROS, &auth_data);
+		if ((auth_data == NULL) || (auth_data[0] == NULL)) {
+			g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH, _("user name required"));
 		} else {
-			g_assert_not_reached();
+			result = net_client_pop_auth_gssapi(client, auth_data[0], error);
 		}
+	} else if ((auth_mask & NET_CLIENT_POP_AUTH_OAUTH2) != 0U) {
+		/* OAuth2 authentication - user name and access token required */
+		g_signal_emit_by_name(client, "auth", NET_CLIENT_AUTH_OAUTH2, &auth_data);
+		if ((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
+			g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH,
+				_("user name and access token required"));
+		} else {
+			result = net_client_pop_auth_oauth2(client, auth_data[0], auth_data[1], error);
+		}
+	} else {
+		/* user name and password authentication methods */
+		g_signal_emit_by_name(client, "auth", NET_CLIENT_AUTH_USER_PASS, &auth_data);
+		if ((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
+			g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH,
+				_("user name and password required"));
+		} else {
+			/* first check for safe (hashed) authentication methods, used plain-text ones if they are not supported */
+			if ((auth_mask & NET_CLIENT_POP_AUTH_CRAM_SHA1) != 0U) {
+				result = net_client_pop_auth_cram(client, G_CHECKSUM_SHA1, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_POP_AUTH_CRAM_MD5) != 0U) {
+				result = net_client_pop_auth_cram(client, G_CHECKSUM_MD5, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_POP_AUTH_APOP) != 0U) {
+				result = net_client_pop_auth_apop(client, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_POP_AUTH_PLAIN) != 0U) {
+				result = net_client_pop_auth_plain(client, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_POP_AUTH_LOGIN) != 0U) {
+				result = net_client_pop_auth_login(client, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_POP_AUTH_USER_PASS) != 0U) {
+				result = net_client_pop_auth_user_pass(client, auth_data[0], auth_data[1], error);
+			} else {
+				g_assert_not_reached();
+			}
+		}
+	}
 
-		/* POP3 does not define a mechanism to indicate that the authentication failed due to a too weak mechanism or wrong
-		 * credentials, so we treat all server -ERR responses as authentication failures */
-		if (!result && (*error != NULL) && ((*error)->code == (gint) NET_CLIENT_ERROR_POP_SERVER_ERR)) {
-			(*error)->code = (gint) NET_CLIENT_ERROR_POP_AUTHFAIL;
+	/* POP3 does not define a mechanism to indicate that the authentication failed due to a too weak mechanism or wrong
+	 * credentials, so we treat all server -ERR responses as authentication failures */
+	if (!result && (error != NULL) && (*error != NULL) && ((*error)->code == (gint) NET_CLIENT_ERROR_POP_SERVER_ERR)) {
+		(*error)->code = (gint) NET_CLIENT_ERROR_POP_AUTHFAIL;
+	}
+
+	/* clean up any auth data */
+	if (auth_data != NULL) {
+		if (auth_data[0] != NULL) {
+			net_client_free_authstr(auth_data[0]);
+			net_client_free_authstr(auth_data[1]);
 		}
+		free(auth_data);
 	}
 
 	return result;
@@ -710,6 +734,24 @@ net_client_pop_auth_login(NetClientPop *client, const gchar *user, const gchar *
 			result = net_client_pop_execute(client, "%s", NULL, error, base64_buf);
 			net_client_free_authstr(base64_buf);
 		}
+	}
+
+	return result;
+}
+
+
+static gboolean
+net_client_pop_auth_anonymous(NetClientPop *client, GError **error)
+{
+	gboolean result;
+
+	result = net_client_pop_execute_sasl(client, "AUTH ANONYMOUS", NULL, error);
+	if (result) {
+		gchar *base64_buf;
+
+		base64_buf = net_client_auth_anonymous_token();
+		result = net_client_pop_execute(client, "%s", NULL, error, base64_buf);
+		net_client_free_authstr(base64_buf);
 	}
 
 	return result;
@@ -856,7 +898,7 @@ net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar 
 
 static gboolean
 net_client_pop_auth_oauth2(NetClientPop G_GNUC_UNUSED *client, const gchar G_GNUC_UNUSED *user,
-	const gcharG_GNUC_UNUSED *access_token, GError G_GNUC_UNUSED **error)
+	const gchar G_GNUC_UNUSED *access_token, GError G_GNUC_UNUSED **error)
 {
 	g_assert_not_reached();			/* this should never happen! */
 	return FALSE;					/* never reached, make gcc happy */
@@ -932,6 +974,8 @@ net_client_pop_get_capa(NetClientPop *client, guint *auth_supported)
 						*auth_supported |= NET_CLIENT_POP_AUTH_CRAM_MD5;
 					} else if (strcmp(auth[n], "CRAM-SHA1") == 0) {
 						*auth_supported |= NET_CLIENT_POP_AUTH_CRAM_SHA1;
+					} else if (strcmp(auth[n], "ANONYMOUS") == 0) {
+						*auth_supported |= NET_CLIENT_POP_AUTH_ANONYMOUS;
 #if defined(HAVE_GSSAPI)
 					} else if (strcmp(auth[n], "GSSAPI") == 0) {
 						*auth_supported |= NET_CLIENT_POP_AUTH_GSSAPI;
@@ -941,7 +985,7 @@ net_client_pop_get_capa(NetClientPop *client, guint *auth_supported)
 						*auth_supported |= NET_CLIENT_POP_AUTH_OAUTH2;
 #endif
 					} else {
-						/* other auth methods are ignored for the time being */
+						/* other auth methods are ignored for the time being (see MISRA C:2012, Rule 15.7) */
 					}
 				}
 				g_strfreev(auth);
