@@ -83,7 +83,7 @@ const gchar *net_client_chksum_to_str(GChecksumType chksum_type);
  * @param passwd password
  * @return a newly allocated string containing the base64-encoded authentication
  *
- * This helper function calculates the the base64-encoded SASL AUTH PLAIN authentication string from the user name and the password
+ * This helper function calculates the base64-encoded SASL AUTH PLAIN authentication string from the user name and the password
  * according to <a href="https://tools.ietf.org/html/rfc4616">RFC 4616</a>.  The caller shall free the returned string when it is
  * not needed any more.
  */
@@ -99,6 +99,21 @@ gchar *net_client_auth_plain_calc(const gchar *user, const gchar *passwd)
  * then frees it.
  */
 void net_client_free_authstr(gchar *str);
+
+
+/** @brief Create a token for anonymous authentication
+ *
+ * @return a newly allocated string containing the base64-encoded authentication
+ *
+ * This helper function calculates a base64-encoded SASL AUTH ANONYMOUS authentication token which is used as trace information by
+ * the server.  As recommended by RFC 4505, the token does not contain personal data.  The returned value is the encoded SHA256 hex
+ * hash of the string <c>user-name@host-name:time<c> (time is the creation time stamp as returned by time()).  This token will be
+ * unique, but makes it impossible for the server to extract user and host.  However, the client @em may store to token if linking
+ * server to client operations is required, e.g. for debugging purposes.
+ *
+ * The caller shall free the returned string when it is not needed any more.
+ */
+gchar *net_client_auth_anonymous_token(void);
 
 
 #if defined(HAVE_GSSAPI)

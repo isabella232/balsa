@@ -71,8 +71,6 @@ typedef struct {
 /** Mask of all authentication methods. */
 #define NET_CLIENT_SMTP_AUTH_ALL			\
 	(NET_CLIENT_SMTP_AUTH_NONE | NET_CLIENT_SMTP_AUTH_PASSWORD | NET_CLIENT_SMTP_AUTH_GSSAPI | NET_CLIENT_SMTP_AUTH_OAUTH2)
-/** Mask of all authentication methods which do not require a password (Note: OAuth2 requires the authentication token). */
-#define NET_CLIENT_SMTP_AUTH_NO_PWD			NET_CLIENT_SMTP_AUTH_GSSAPI
 /** @} */
 
 
@@ -91,8 +89,7 @@ static gboolean net_client_smtp_ehlo(NetClientSmtp *client, guint *auth_supporte
 static gboolean net_client_smtp_starttls(NetClientSmtp *client, GError **error);
 static gboolean net_client_smtp_execute(NetClientSmtp *client, const gchar *request_fmt, gchar **last_reply, GError **error, ...)
 	G_GNUC_PRINTF(2, 5);
-static gboolean net_client_smtp_auth(NetClientSmtp *client, const gchar *user, const gchar *passwd, guint auth_supported,
-									 GError **error);
+static gboolean net_client_smtp_auth(NetClientSmtp *client, guint auth_supported, GError **error);
 static gboolean net_client_smtp_auth_plain(NetClientSmtp *client, const gchar *user, const gchar *passwd, GError **error);
 static gboolean net_client_smtp_auth_login(NetClientSmtp *client, const gchar *user, const gchar *passwd, GError **error);
 static gboolean net_client_smtp_auth_cram(NetClientSmtp *client, GChecksumType chksum_type, const gchar *user, const gchar *passwd,
@@ -133,7 +130,7 @@ net_client_smtp_set_auth_mode(NetClientSmtp *client, NetClientAuthMode auth_mode
 	g_return_val_if_fail(NET_IS_CLIENT_SMTP(client), FALSE);
 
 	client->auth_enabled = 0U;
-	if ((auth_mode & NET_CLIENT_AUTH_ANONYMOUS) != 0U) {
+	if ((auth_mode & NET_CLIENT_AUTH_NONE_ANON) != 0U) {
 		client->auth_enabled |= NET_CLIENT_SMTP_AUTH_NONE;
 	}
 	if ((auth_mode & NET_CLIENT_AUTH_USER_PASS) != 0U) {
@@ -300,20 +297,8 @@ net_client_smtp_connect(NetClientSmtp *client, gchar **greeting, GError **error)
 	}
 
 	/* authenticate if we were successful so far, unless anonymous access is configured */
-	if (result && (client->auth_enabled != NET_CLIENT_SMTP_AUTH_NONE)) {
-		gchar **auth_data;
-		gboolean need_pwd;
-
-		auth_data = NULL;
-		need_pwd = (auth_supported & NET_CLIENT_SMTP_AUTH_NO_PWD) == 0U;
-		g_debug("emit 'auth' signal for client %p, need pwd %d", client, need_pwd);
-		g_signal_emit_by_name(client, "auth", need_pwd, &auth_data);
-		if ((auth_data != NULL) && (auth_data[0] != NULL)) {
-			result = net_client_smtp_auth(client, auth_data[0], auth_data[1], auth_supported, error);
-			net_client_free_authstr(auth_data[0]);
-			net_client_free_authstr(auth_data[1]);
-		}
-		g_free(auth_data);
+	if (result && ((client->auth_enabled & NET_CLIENT_SMTP_AUTH_NONE) == 0U)) {
+		result = net_client_smtp_auth(client, auth_supported, error);
 	}
 
 	return result;
@@ -526,36 +511,65 @@ net_client_smtp_starttls(NetClientSmtp *client, GError **error)
 
 
 static gboolean
-net_client_smtp_auth(NetClientSmtp *client, const gchar *user, const gchar *passwd, guint auth_supported, GError **error)
+net_client_smtp_auth(NetClientSmtp *client, guint auth_supported, GError **error)
 {
 	gboolean result = FALSE;
 	guint auth_mask;
+	gchar **auth_data = NULL;
 
 	/* calculate the possible authentication methods */
 	auth_mask = client->auth_enabled & auth_supported;
 
+	/* try, in this order, enabled modes: GSSAPI/Kerberos; OAuth2; user name and password */
 	if (auth_mask == 0U) {
 		g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_NO_AUTH,
 			_("no suitable authentication mechanism"));
-	} else if (((auth_mask & NET_CLIENT_SMTP_AUTH_NO_PWD) == 0U) && (passwd == NULL)) {
-		g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_NO_AUTH, _("password required"));
-	} else {
-		/* first try authentication methods w/o password, then safe ones, and finally the plain-text methods */
-		if ((auth_mask & NET_CLIENT_SMTP_AUTH_OAUTH2) != 0U) {
-			result = net_client_smtp_auth_oauth2(client, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_GSSAPI) != 0U) {
-			result = net_client_smtp_auth_gssapi(client, user, error);
-		} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_CRAM_SHA1) != 0U) {
-			result = net_client_smtp_auth_cram(client, G_CHECKSUM_SHA1, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_CRAM_MD5) != 0U) {
-			result = net_client_smtp_auth_cram(client, G_CHECKSUM_MD5, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_PLAIN) != 0U) {
-			result = net_client_smtp_auth_plain(client, user, passwd, error);
-		} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_LOGIN) != 0U) {
-			result = net_client_smtp_auth_login(client, user, passwd, error);
+	} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_GSSAPI) != 0U) {
+		/* GSSAPI aka Kerberos authentication - user name required */
+		g_signal_emit_by_name(client, "auth", NET_CLIENT_AUTH_KERBEROS, &auth_data);
+		if ((auth_data == NULL) || (auth_data[0] == NULL)) {
+			g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_NO_AUTH, _("user name required"));
 		} else {
-			g_assert_not_reached();
+			result = net_client_smtp_auth_gssapi(client, auth_data[0], error);
 		}
+	} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_OAUTH2) != 0U) {
+		/* OAuth2 authentication - user name and access token required */
+		g_signal_emit_by_name(client, "auth", NET_CLIENT_AUTH_OAUTH2, &auth_data);
+		if ((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
+			g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_NO_AUTH,
+				_("user name and access token required"));
+		} else {
+			result = net_client_smtp_auth_oauth2(client, auth_data[0], auth_data[1], error);
+		}
+	} else {
+		/* user name and password authentication methods */
+		g_signal_emit_by_name(client, "auth", NET_CLIENT_AUTH_USER_PASS, &auth_data);
+		if ((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
+			g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_NO_AUTH,
+				_("user name and password required"));
+		} else {
+			/* first check for safe (hashed) authentication methods, used plain-text ones if they are not supported */
+			if ((auth_mask & NET_CLIENT_SMTP_AUTH_CRAM_SHA1) != 0U) {
+				result = net_client_smtp_auth_cram(client, G_CHECKSUM_SHA1, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_CRAM_MD5) != 0U) {
+				result = net_client_smtp_auth_cram(client, G_CHECKSUM_MD5, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_PLAIN) != 0U) {
+				result = net_client_smtp_auth_plain(client, auth_data[0], auth_data[1], error);
+			} else if ((auth_mask & NET_CLIENT_SMTP_AUTH_LOGIN) != 0U) {
+				result = net_client_smtp_auth_login(client, auth_data[0], auth_data[1], error);
+			} else {
+				g_assert_not_reached();
+			}
+		}
+	}
+
+	/* clean up any auth data */
+	if (auth_data != NULL) {
+		if (auth_data[0] != NULL) {
+			net_client_free_authstr(auth_data[0]);
+			net_client_free_authstr(auth_data[1]);
+		}
+		free(auth_data);
 	}
 
 	return result;

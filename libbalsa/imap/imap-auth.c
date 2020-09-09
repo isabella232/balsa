@@ -64,7 +64,7 @@ imap_authenticate(ImapMboxHandle* handle)
 	  r = imap_auth_gssapi(handle);
   }
 
-  if ((r != IMAP_SUCCESS) && (handle->auth_mode & NET_CLIENT_AUTH_ANONYMOUS) != 0U) {
+  if ((r != IMAP_SUCCESS) && (handle->auth_mode & NET_CLIENT_AUTH_NONE_ANON) != 0U) {
 	  r = imap_auth_anonymous(handle);
   }
 
@@ -94,7 +94,7 @@ imap_auth_login(ImapMboxHandle* handle)
   if (imap_mbox_handle_can_do(handle, IMCAP_LOGINDISABLED))
     return IMAP_AUTH_UNAVAIL;
   
-  g_signal_emit_by_name(handle->sio, "auth", TRUE, &auth_data);
+  g_signal_emit_by_name(handle->sio, "auth", NET_CLIENT_AUTH_USER_PASS, &auth_data);
   if((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
     imap_mbox_handle_set_msg(handle, _("Authentication cancelled"));
 	g_strfreev(auth_data);
@@ -184,7 +184,7 @@ getmsg_plain(ImapMboxHandle *h, char **retmsg, int *retmsglen)
 	gchar **auth_data;
 	gboolean result;
 
-	g_signal_emit_by_name(h->sio, "auth", TRUE, &auth_data);
+	g_signal_emit_by_name(h->sio, "auth", NET_CLIENT_AUTH_USER_PASS, &auth_data);
 	if ((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
 		result = FALSE;
 	} else {
@@ -209,24 +209,14 @@ imap_auth_plain(ImapMboxHandle* handle)
 
 
 /* =================================================================== */
-/* SASL ANONYMOUS RFC-2245                                             */
+/* SASL ANONYMOUS RFC-4505                                             */
 /* =================================================================== */
 static gboolean
 getmsg_anonymous(ImapMboxHandle *h, char **retmsg, int *retmsglen)
 {
-	gchar **auth_data;
-	gboolean result;
-
-	g_signal_emit_by_name(h->sio, "auth", FALSE, &auth_data);
-	if((auth_data == NULL) || (auth_data[0] == NULL)) {
-		result = FALSE;
-	} else {
-		*retmsg = g_base64_encode((const guchar *) auth_data[0], strlen(auth_data[0]));
-		*retmsglen = strlen(*retmsg);
-		result = TRUE;
-	}
-	g_strfreev(auth_data);
-	return result;
+	*retmsg = net_client_auth_anonymous_token();
+	*retmsglen = strlen(*retmsg);
+	return TRUE;
 }
 
 static ImapResult

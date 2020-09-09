@@ -4480,7 +4480,7 @@ imap_server_probe(const gchar *host, guint timeout_secs, NetClientProbeResult *r
 
 				result->auth_mode = 0U;
 				if (imap_mbox_handle_can_do(handle, IMCAP_AANONYMOUS) != 0) {
-					result->auth_mode |= NET_CLIENT_AUTH_ANONYMOUS;
+					result->auth_mode |= NET_CLIENT_AUTH_NONE_ANON;
 				}
 				if ((imap_mbox_handle_can_do(handle, IMCAP_ACRAM_MD5) != 0) ||
 					(imap_mbox_handle_can_do(handle, IMCAP_APLAIN) != 0)) {

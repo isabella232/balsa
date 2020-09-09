@@ -36,6 +36,13 @@
 #include "net-client-utils.h"
 #include <glib/gi18n.h>
 
+
+#ifdef G_LOG_DOMAIN
+#  undef G_LOG_DOMAIN
+#endif
+#define G_LOG_DOMAIN "libbalsa-server"
+
+
 #if defined(HAVE_LIBSECRET)
 static const SecretSchema server_schema = {
     "org.gnome.Balsa.NetworkPassword", SECRET_SCHEMA_NONE,
@@ -448,7 +455,7 @@ libbalsa_server_load_config(LibBalsaServer * server)
 	priv->auth_mode = libbalsa_conf_get_int("AuthMode=2");  /* default NET_CLIENT_AUTH_USER_PASS */
     if (libbalsa_conf_has_key("Anonymous")) {
     	if (libbalsa_conf_get_bool("Anonymous")) {
-    		priv->auth_mode = NET_CLIENT_AUTH_ANONYMOUS;
+    		priv->auth_mode = NET_CLIENT_AUTH_NONE_ANON;
     	}
     	libbalsa_conf_clean_key("Anonymous");
     }
@@ -553,25 +560,32 @@ libbalsa_server_connect_signals(LibBalsaServer * server, GCallback cb,
 
 
 gchar **
-libbalsa_server_get_auth(NetClient *client,
-						 gboolean   need_passwd,
-         	 	 	 gpointer   user_data)
+libbalsa_server_get_auth(NetClient         *client,
+						 NetClientAuthMode  mode,
+						 gpointer           user_data)
 {
     LibBalsaServer *server = LIBBALSA_SERVER(user_data);
     LibBalsaServerPrivate *priv = libbalsa_server_get_instance_private(server);
     gchar **result = NULL;
 
-    g_debug("%s: %p %p: encrypted = %d", __func__, client, user_data,
-            net_client_is_encrypted(client));
-    if (priv->auth_mode != NET_CLIENT_AUTH_ANONYMOUS) {
+    g_debug("%s: %p %d %p: encrypted = %d", __func__, client, mode, user_data, net_client_is_encrypted(client));
+    if (priv->auth_mode != NET_CLIENT_AUTH_NONE_ANON) {
         result = g_new0(gchar *, 3U);
         result[0] = g_strdup(priv->user);
-        if (need_passwd) {
-        if ((priv->passwd != NULL) && (priv->passwd[0] != '\0')) {
-        	result[1] = g_strdup(priv->passwd);
-        } else {
-        	result[1] = lbs_get_password(server, NULL);
-        }
+        switch (mode) {
+        case NET_CLIENT_AUTH_USER_PASS:
+            if ((priv->passwd != NULL) && (priv->passwd[0] != '\0')) {
+            	result[1] = g_strdup(priv->passwd);
+            } else {
+            	result[1] = lbs_get_password(server, NULL);
+            }
+            break;
+        case NET_CLIENT_AUTH_KERBEROS:
+        	break;			/* only user name required */
+        case NET_CLIENT_AUTH_OAUTH2:
+        	break;			// FIXME!! get the OAuth2 token in result[1]
+        default:
+        	g_assert_not_reached();
         }
     }
     return result;

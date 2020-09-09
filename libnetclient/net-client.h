@@ -52,7 +52,7 @@ enum _NetClientCryptMode {
 
 /** @brief Authentication mode */
 enum _NetClientAuthMode {
-	NET_CLIENT_AUTH_ANONYMOUS = 1,			/**< No authentication required (e.g. local service, user cert authentication). */
+	NET_CLIENT_AUTH_NONE_ANON = 1,			/**< No authentication (SMTP); anonymous authentication (RFC 4505 for POP3, IMAP). */
 	NET_CLIENT_AUTH_USER_PASS = 2,			/**< Authenticate with user name and password. */
 	NET_CLIENT_AUTH_KERBEROS = 4,			/**< Authenticate with user name and Kerberos ticket. */
 	NET_CLIENT_AUTH_OAUTH2 = 8				/**< OAuth2 authentication (RFC 6749). */
@@ -343,12 +343,11 @@ gboolean net_client_can_read(NetClient *client);
  *   @endcode The server certificate is not trusted.  The received certificate and the errors which occurred during the check are
  *   passed to the signal handler.  The handler shall return TRUE to accept the certificate, or FALSE to reject it.
  * - @anchor auth auth
- *   @code gchar **get_auth(NetClient *client, gboolean need_passwd, gpointer user_data) @endcode Authentication is required by the
- *   remote server.  The signal handler shall return a NULL-terminated array of strings, containing the user name in the first and
- *   the password in the second element.  If the parameter @em need_passwd is FALSE, no password is required (e.g. for kerberos
- *   ticket-based or for OAuth2 authentication).  In this case, the password element must be present in the reply, but it is ignored
- *   an may be NULL.  The strings are wiped and freed when they are not needed any more.  Return NULL if no authentication is
- *   required.
+ *   @code gchar **get_auth(NetClient *client, NetClientAuthMode mode, gpointer user_data) @endcode Authentication is required by
+ *   the remote server.  The signal handler shall return a NULL-terminated array of strings, containing the user name in the first
+ *   and the password (mode @ref NET_CLIENT_AUTH_USER_PASS) or the OAuth2 access token (@ref NET_CLIENT_AUTH_OAUTH2) in the second
+ *   element.  For @ref NET_CLIENT_AUTH_KERBEROS, no password is required.  In this case, the second element must be present in the
+ *   reply, but it is ignored and should be NULL.  The strings are wiped and freed when they are not needed any more.
  */
 
 

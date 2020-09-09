@@ -129,6 +129,25 @@ net_client_auth_plain_calc(const gchar *user, const gchar *passwd)
 }
 
 
+gchar *
+net_client_auth_anonymous_token(void)
+{
+	gchar *buffer;
+	GChecksum *hash;
+	const gchar *hash_str;
+
+	buffer = g_strdup_printf("%s@%s:%ld", g_get_user_name(), g_get_host_name(), (long) time(NULL));
+	hash = g_checksum_new(G_CHECKSUM_SHA256);
+	g_checksum_update(hash, (const guchar *) buffer, strlen(buffer));
+	g_free(buffer);
+
+	hash_str = g_checksum_get_string(hash);
+	buffer = g_base64_encode((const guchar *) hash_str, strlen(hash_str));
+	g_checksum_free(hash);
+	return buffer;
+}
+
+
 void
 net_client_free_authstr(gchar *str)
 {
