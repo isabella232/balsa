@@ -599,11 +599,11 @@ message_prefs_widget(GtkPrintOperation * operation,
 
     print_prefs->highlight_cited =
 	gtk_check_button_new_with_mnemonic(_("Highlight _cited text"));
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(print_prefs->highlight_cited), balsa_app.print_highlight_cited);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(print_prefs->highlight_cited), balsa_app.print_highlight_cited);
     gtk_grid_attach(GTK_GRID(grid), print_prefs->highlight_cited, 1, 0, 1, 1);
 
     print_prefs->highlight_phrases = gtk_check_button_new_with_mnemonic(_("Highlight _structured phrases"));
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(print_prefs->highlight_phrases), balsa_app.print_highlight_phrases);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(print_prefs->highlight_phrases), balsa_app.print_highlight_phrases);
     gtk_grid_attach(GTK_GRID(grid), print_prefs->highlight_phrases, 1, 1, 1, 1);
 
 #ifdef HAVE_HTML_WIDGET
@@ -611,11 +611,11 @@ message_prefs_widget(GtkPrintOperation * operation,
     grid = create_options_group(_("Highlighting"), page, 1, 1, 1);
 
     print_prefs->html_print = gtk_check_button_new_with_mnemonic(_("Prefer text/plain over HTML"));
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(print_prefs->html_print), balsa_app.display_alt_plain);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(print_prefs->html_print), balsa_app.display_alt_plain);
     gtk_grid_attach(GTK_GRID(grid), print_prefs->html_print, 1, 0, 1, 1);
 
     print_prefs->html_load_imgs = gtk_check_button_new_with_mnemonic(_("Download images from remote servers (may be dangerous)"));
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(print_prefs->html_load_imgs), FALSE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(print_prefs->html_load_imgs), FALSE);
     gtk_grid_attach(GTK_GRID(grid), print_prefs->html_load_imgs, 1, 1, 1, 1);
 
     /* phantom alignment */
@@ -683,10 +683,10 @@ message_prefs_apply(GtkPrintOperation * operation, GtkWidget * widget,
     balsa_app.print_footer_font =
 	gtk_font_chooser_get_font(GTK_FONT_CHOOSER(print_prefs->footer_font));
     balsa_app.print_highlight_cited =
-	gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON
+	gtk_check_button_get_active(GTK_CHECK_BUTTON
                                      (print_prefs->highlight_cited));
     balsa_app.print_highlight_phrases =
-	gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON
+	gtk_check_button_get_active(GTK_CHECK_BUTTON
                                      (print_prefs->highlight_phrases));
 
     balsa_app.margin_top =
@@ -706,9 +706,9 @@ message_prefs_apply(GtkPrintOperation * operation, GtkWidget * widget,
     }
 #ifdef HAVE_HTML_WIDGET
     print_prefs->setup->print_alt_html =
-    	!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(print_prefs->html_print));
+    	!gtk_check_button_get_active(GTK_CHECK_BUTTON(print_prefs->html_print));
     print_prefs->setup->html_load_images =
-    	gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(print_prefs->html_load_imgs));
+    	gtk_check_button_get_active(GTK_CHECK_BUTTON(print_prefs->html_load_imgs));
 #endif
 }
 
