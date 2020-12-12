@@ -1814,6 +1814,8 @@ imap_cmd_step(ImapMboxHandle* handle, unsigned lastcmd)
     if(rc == IMR_BYE) {
       return handle->doing_logout ? IMR_UNTAGGED : IMR_BYE;
     }
+    if(rc == IMR_BAD)
+      return rc;
     return IMR_UNTAGGED;
   }
 
@@ -4182,7 +4184,8 @@ ir_handle_response(ImapMboxHandle *h)
       }
     }
   }
-  imap_handle_process_tasks(h);
+  if (rc != IMR_BAD)
+    imap_handle_process_tasks(h);
   return rc;
 }
 
