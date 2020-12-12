@@ -134,8 +134,10 @@ imap_mbox_handle_can_do(ImapMboxHandle* handle, ImapCapability cap)
     return handle->can_fetch_body;
 
   /* perhaps it already has capabilities? */
-  if(!handle->has_capabilities)
-    imap_check_capability(handle);
+  if(!handle->has_capabilities) {
+    if(!imap_check_capability(handle))
+      return 0;
+  }
 
   if(cap<IMCAP_MAX)
     return handle->capabilities[cap];
