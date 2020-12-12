@@ -61,6 +61,8 @@ imap_authenticate(ImapMboxHandle* handle)
 
   for(authenticator = imap_authenticators_arr;
       *authenticator; authenticator++) {
+      if (handle->sio == NULL)
+        return r;
     if ((r = (*authenticator)(handle)) 
         != IMAP_AUTH_UNAVAIL) {
       if (r == IMAP_SUCCESS)
