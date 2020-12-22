@@ -2107,7 +2107,7 @@ ir_capability_data(ImapMboxHandle *handle)
   /* ordered identically as ImapCapability constants */
   static const char* capabilities[] = {
     "IMAP4", "IMAP4rev1", "STATUS",
-    "AUTH=ANONYMOUS", "AUTH=CRAM-MD5", "AUTH=GSSAPI", "AUTH=PLAIN", "AUTH=XOAUTH2",
+    "AUTH=ANONYMOUS", "AUTH=CRAM-MD5", "AUTH=GSSAPI", "AUTH=PLAIN", "AUTH=OAUTHBEARER",
     "ACL", "RIGHTS=", "BINARY", "CHILDREN",
     "COMPRESS=DEFLATE",
     "ESEARCH", "IDLE", "LITERAL+",

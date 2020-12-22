@@ -34,6 +34,7 @@
 static ImapResult imap_auth_anonymous(ImapMboxHandle* handle);
 static ImapResult imap_auth_plain(ImapMboxHandle* handle);
 static ImapResult imap_auth_login(ImapMboxHandle* handle);
+static ImapResult imap_auth_oauth2(ImapMboxHandle* handle);
 
 typedef ImapResult (*ImapAuthenticator)(ImapMboxHandle* handle);
 
@@ -57,25 +58,20 @@ imap_authenticate(ImapMboxHandle* handle)
     return IMAP_SUCCESS;
 
   if ((handle->auth_mode & NET_CLIENT_AUTH_OAUTH2) != 0U) {
-	  /* FIXME!! */
-  }
-
-  if ((r != IMAP_SUCCESS) && (handle->auth_mode & NET_CLIENT_AUTH_KERBEROS) != 0U) {
+	  r = imap_auth_oauth2(handle);
+  } else if ((handle->auth_mode & NET_CLIENT_AUTH_KERBEROS) != 0U) {
 	  r = imap_auth_gssapi(handle);
-  }
-
-  if ((r != IMAP_SUCCESS) && (handle->auth_mode & NET_CLIENT_AUTH_NONE_ANON) != 0U) {
+  } else if ((handle->auth_mode & NET_CLIENT_AUTH_NONE_ANON) != 0U) {
 	  r = imap_auth_anonymous(handle);
-  }
-
-  for (authenticator = imap_authenticators_arr; (r != IMAP_SUCCESS) && *authenticator; authenticator++) {
-	  r = (*authenticator)(handle);
-	  if (r == IMAP_SUCCESS) {
-		  imap_mbox_handle_set_state(handle, IMHS_AUTHENTICATED);
+  } else {
+	  for (authenticator = imap_authenticators_arr; (r != IMAP_SUCCESS) && *authenticator; authenticator++) {
+		  r = (*authenticator)(handle);
 	  }
   }
 
-  if (r != IMAP_SUCCESS) {
+  if (r == IMAP_SUCCESS) {
+	  imap_mbox_handle_set_state(handle, IMHS_AUTHENTICATED);
+  } else if (r == IMAP_AUTH_UNAVAIL) {
 	  imap_mbox_handle_set_msg(handle, _("No way to authenticate is known"));
   }
   return r;
@@ -226,3 +222,46 @@ imap_auth_anonymous(ImapMboxHandle* handle)
 			getmsg_anonymous);
 }
 
+
+/* =================================================================== */
+/* SASL OAUTHBEARER (RFC 7628)                                         */
+/* =================================================================== */
+
+#if defined(HAVE_OAUTH2)
+static gboolean
+getmsg_oauth2(ImapMboxHandle *h, char **retmsg, int *retmsglen)
+{
+	gchar **auth_data;
+	gboolean result;
+
+	g_signal_emit_by_name(h->sio, "auth", NET_CLIENT_AUTH_OAUTH2, &auth_data);
+	if ((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
+		result = FALSE;
+	} else {
+		*retmsg = net_client_auth_oauth2_calc(auth_data[0], NET_CLIENT(h->sio), auth_data[1]);
+		*retmsglen = strlen(*retmsg);
+		result = TRUE;
+	}
+	if (auth_data != NULL) {
+		net_client_free_authstr(auth_data[0]);
+		net_client_free_authstr(auth_data[1]);
+		g_free(auth_data);
+	}
+	return result;
+}
+
+static ImapResult
+imap_auth_oauth2(ImapMboxHandle* handle)
+{
+	return imap_auth_sasl(handle, IMCAP_AOAUTH2, "AUTHENTICATE OAUTHBEARER", getmsg_oauth2);
+}
+
+#else
+
+static ImapResult
+imap_auth_oauth2(ImapMboxHandle* handle)
+{
+	return IMAP_AUTH_UNAVAIL;
+}
+
+#endif	/* defined(HAVE_OAUTH2) */

@@ -89,7 +89,7 @@ address book is in the works but needs some finishing touches.
 
 --with-osmo
 	Enable experimental support for read-only DBus access to the Osmo
-	contacts.  Note that Osmo svn rev. 1099 or later is required.
+contacts.  Note that Osmo svn rev. 1099 or later is required.
 
 --with-canberra
 	Use libcanberra-gtk3 for filter sounds.
@@ -101,6 +101,9 @@ authors in a mail header.
 --with-gtksourceview
 	Use GtkSourceview for highlighting structured phrases in
 messages, and for syntax highlighting in attachments.
+
+--with-oauth2
+	Enable OAuth2 authentication (needs libsoup and json-glib)
 
 
 Libraries:
@@ -250,7 +253,9 @@ following custom domains are implemented in Balsa:
 - mbox-mbox: MBox mailbox operations
 - mbox-mh: MH mailbox operations
 - mbox-pop3: POP3 mailbox operations
+- oauth: OAuth2 authentication operations
 - send: message transmission
+- libbalsa-server: server operations
 - spell-check: internal spell checker
 
 

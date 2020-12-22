@@ -61,7 +61,7 @@ typedef struct {
 #define NET_CLIENT_SMTP_AUTH_CRAM_SHA1		0x10U
 /** RFC 4752 "GSSAPI" authentication method. */
 #define NET_CLIENT_SMTP_AUTH_GSSAPI			0x20U
-/** RFC 6749 "XOAUTH2" authentication method. */
+/** RFC 7628 "OAUTHBEARER" authentication method. */
 #define NET_CLIENT_SMTP_AUTH_OAUTH2			0x40U
 
 /** Mask of all authentication methods requiring user name and password. */
@@ -87,8 +87,9 @@ G_DEFINE_TYPE(NetClientSmtp, net_client_smtp, NET_CLIENT_TYPE)
 static void net_client_smtp_finalise(GObject *object);
 static gboolean net_client_smtp_ehlo(NetClientSmtp *client, guint *auth_supported, gboolean *can_starttls, GError **error);
 static gboolean net_client_smtp_starttls(NetClientSmtp *client, GError **error);
-static gboolean net_client_smtp_execute(NetClientSmtp *client, const gchar *request_fmt, gchar **last_reply, GError **error, ...)
-	G_GNUC_PRINTF(2, 5);
+static gboolean net_client_smtp_execute(NetClientSmtp *client, const gchar *request_fmt, gint expect_code, gchar **last_reply,
+	GError **error, ...)
+	G_GNUC_PRINTF(2, 6);
 static gboolean net_client_smtp_auth(NetClientSmtp *client, guint auth_supported, GError **error);
 static gboolean net_client_smtp_auth_plain(NetClientSmtp *client, const gchar *user, const gchar *passwd, GError **error);
 static gboolean net_client_smtp_auth_login(NetClientSmtp *client, const gchar *user, const gchar *passwd, GError **error);
@@ -97,7 +98,7 @@ static gboolean net_client_smtp_auth_cram(NetClientSmtp *client, GChecksumType c
 static gboolean net_client_smtp_auth_gssapi(NetClientSmtp *client, const gchar *user, GError **error);
 static gboolean net_client_smtp_auth_oauth2(NetClientSmtp *client, const gchar *user, const gchar *access_token, GError **error);
 static gboolean net_client_smtp_read_reply(NetClientSmtp *client, gint expect_code, gchar **last_reply, GError **error);
-static gboolean net_client_smtp_eval_rescode(gint res_code, const gchar *reply, GError **error);
+static gboolean net_client_smtp_eval_rescode(gint res_code, gint expect_code, const gchar *reply, GError **error);
 static gchar *net_client_smtp_dsn_to_string(const NetClientSmtp *client, NetClientSmtpDsnMode dsn_mode);
 static void smtp_rcpt_free(smtp_rcpt_t *rcpt);
 
@@ -141,7 +142,7 @@ net_client_smtp_set_auth_mode(NetClientSmtp *client, NetClientAuthMode auth_mode
 		client->auth_enabled |= NET_CLIENT_SMTP_AUTH_GSSAPI;
 	}
 #endif
-#if defined (HAVE_OAUTH2)
+#if defined(HAVE_OAUTH2)
 	if ((auth_mode & NET_CLIENT_AUTH_OAUTH2) != 0U) {
 		client->auth_enabled |= NET_CLIENT_SMTP_AUTH_OAUTH2;
 	}
@@ -268,7 +269,7 @@ net_client_smtp_connect(NetClientSmtp *client, gchar **greeting, GError **error)
 		result = net_client_start_tls(NET_CLIENT(client), error);
 	}
 
-	/* get the greeting */
+	/* get the greeting, RFC 5321 requires status 220 */
 	if (result) {
 		(void) net_client_set_timeout(NET_CLIENT(client), 5U * 60U);	/* RFC 5321, Sect. 4.5.3.2.1.: 5 minutes timeout */
 		result = net_client_smtp_read_reply(client, 220, greeting, error);
@@ -323,19 +324,19 @@ net_client_smtp_send_msg(NetClientSmtp *client, const NetClientSmtpMessage *mess
 	g_return_val_if_fail(NET_IS_CLIENT_SMTP(client) && (message != NULL) && (message->sender != NULL) &&
 		(message->recipients != NULL) && (message->data_callback != NULL), FALSE);
 
-	/* set the RFC 5321 sender and recipient(s) */
+	/* set the RFC 5321 sender and recipient(s); Sect. 3.3 requires status 250 */
 	netclient = NET_CLIENT(client);		/* convenience pointer */
 	(void) net_client_set_timeout(netclient, 5U * 60U);	/* RFC 5321, Sect. 4.5.3.2.2., 4.5.3.2.3.: 5 minutes timeout */
 	if (client->can_dsn && message->have_dsn_rcpt) {
 		if (message->dsn_envid != NULL) {
-			result = net_client_smtp_execute(client, "MAIL FROM:<%s> RET=%s ENVID=%s", NULL, error, message->sender,
+			result = net_client_smtp_execute(client, "MAIL FROM:<%s> RET=%s ENVID=%s", 250, NULL, error, message->sender,
 											 (message->dsn_ret_full) ? "FULL" : "HDRS", message->dsn_envid);
 		} else {
-			result = net_client_smtp_execute(client, "MAIL FROM:<%s> RET=%s", NULL, error, message->sender,
+			result = net_client_smtp_execute(client, "MAIL FROM:<%s> RET=%s", 250, NULL, error, message->sender,
 											 (message->dsn_ret_full) ? "FULL" : "HDRS");
 		}
 	} else {
-		result = net_client_smtp_execute(client, "MAIL FROM:<%s>", NULL, error, message->sender);
+		result = net_client_smtp_execute(client, "MAIL FROM:<%s>", 250, NULL, error, message->sender);
 	}
 	rcpt = message->recipients;
 	while (result && (rcpt != NULL)) {
@@ -344,15 +345,15 @@ net_client_smtp_send_msg(NetClientSmtp *client, const NetClientSmtpMessage *mess
 
 		/* create the RFC 3461 DSN string */
 		dsn_opts = net_client_smtp_dsn_to_string(client, this_rcpt->dsn_mode);
-		result = net_client_smtp_execute(client, "RCPT TO:<%s>%s", NULL, error, this_rcpt->rfc5321_addr, dsn_opts);
+		result = net_client_smtp_execute(client, "RCPT TO:<%s>%s", 250, NULL, error, this_rcpt->rfc5321_addr, dsn_opts);
 		g_free(dsn_opts);
 		rcpt = rcpt->next;
 	}
 
-	/* initialise sending the message data */
+	/* initialise sending the message data; Sect. 3.3 requires status 354 */
 	if (result) {
 		(void) net_client_set_timeout(netclient, 2U * 60U);	/* RFC 5321, Sect. 4.5.3.2.4.: 2 minutes timeout */
-		result = net_client_smtp_execute(client, "DATA", NULL, error);
+		result = net_client_smtp_execute(client, "DATA", 354, NULL, error);
 	}
 
 	/* call the data callback until all data has been transmitted or an error occurs */
@@ -383,7 +384,7 @@ net_client_smtp_send_msg(NetClientSmtp *client, const NetClientSmtpMessage *mess
 
 	if (result) {
 		(void) net_client_set_timeout(netclient, 10U * 60U);	/* RFC 5321, Sect 4.5.3.2.6.: 10 minutes timeout */
-		result = net_client_smtp_read_reply(client, -1, server_stat, error);
+		result = net_client_smtp_read_reply(client, -1, server_stat, error);	// FIXME - expect 250
 		client->data_state = FALSE;
 	}
 
@@ -501,7 +502,8 @@ net_client_smtp_starttls(NetClientSmtp *client, GError **error)
 {
 	gboolean result;
 
-	result = net_client_smtp_execute(client, "STARTTLS", NULL, error);
+	/* RFC 3207, Sect. 4 requires status 220 */
+	result = net_client_smtp_execute(client, "STARTTLS", 220, NULL, error);
 	if (result) {
 		result = net_client_start_tls(NET_CLIENT(client), error);
 	}
@@ -584,7 +586,8 @@ net_client_smtp_auth_plain(NetClientSmtp *client, const gchar *user, const gchar
 
 	base64_buf = net_client_auth_plain_calc(user, passwd);
 	if (base64_buf != NULL) {
-		result = net_client_smtp_execute(client, "AUTH PLAIN %s", NULL, error, base64_buf);
+		/* RFC 4954, Sect. 6 requires status 235 */
+		result = net_client_smtp_execute(client, "AUTH PLAIN %s", 235, NULL, error, base64_buf);
 		net_client_free_authstr(base64_buf);
 	} else {
 		result = FALSE;
@@ -600,12 +603,13 @@ net_client_smtp_auth_login(NetClientSmtp *client, const gchar *user, const gchar
 	gboolean result;
 	gchar *base64_buf;
 
+	/* RFC 4954, Sect. 4 requires status 334 for the challenge; Sect. 6 requires status 235 */
 	base64_buf = g_base64_encode((const guchar *) user, strlen(user));
-	result = net_client_smtp_execute(client, "AUTH LOGIN %s", NULL, error, base64_buf);
+	result = net_client_smtp_execute(client, "AUTH LOGIN %s", 334, NULL, error, base64_buf);
 	net_client_free_authstr(base64_buf);
 	if (result) {
 		base64_buf = g_base64_encode((const guchar *) passwd, strlen(passwd));
-		result = net_client_smtp_execute(client, "%s", NULL, error, base64_buf);
+		result = net_client_smtp_execute(client, "%s", 235, NULL, error, base64_buf);
 		net_client_free_authstr(base64_buf);
 	}
 
@@ -619,13 +623,14 @@ net_client_smtp_auth_cram(NetClientSmtp *client, GChecksumType chksum_type, cons
 	gboolean result;
 	gchar *challenge = NULL;
 
-	result = net_client_smtp_execute(client, "AUTH CRAM-%s", &challenge, error, net_client_chksum_to_str(chksum_type));
+	/* RFC 4954, Sect. 4 requires status 334 for the challenge; Sect. 6 requires status 235 */
+	result = net_client_smtp_execute(client, "AUTH CRAM-%s", 334, &challenge, error, net_client_chksum_to_str(chksum_type));
 	if (result) {
 		gchar *auth_buf;
 
 		auth_buf = net_client_cram_calc(challenge, chksum_type, user, passwd);
 		if (auth_buf != NULL) {
-			result = net_client_smtp_execute(client, "%s", NULL, error, auth_buf);
+			result = net_client_smtp_execute(client, "%s", 235, NULL, error, auth_buf);
 			net_client_free_authstr(auth_buf);
 		} else {
 			result = FALSE;
@@ -645,6 +650,7 @@ net_client_smtp_auth_gssapi(NetClientSmtp *client, const gchar *user, GError **e
 	NetClientGssCtx *gss_ctx;
 	gboolean result = FALSE;
 
+	/* RFC 4954, Sect. 4 requires status 334 for the challenges; Sect. 6 requires status 235 */
 	gss_ctx = net_client_gss_ctx_new("smtp", net_client_get_host(NET_CLIENT(client)), user, error);
 	if (gss_ctx != NULL) {
 		gint state;
@@ -658,10 +664,10 @@ net_client_smtp_auth_gssapi(NetClientSmtp *client, const gchar *user, GError **e
 			input_token = NULL;
 			if (state >= 0) {
 				if (initial) {
-					result = net_client_smtp_execute(client, "AUTH GSSAPI %s", &input_token, error, output_token);
+					result = net_client_smtp_execute(client, "AUTH GSSAPI %s", 334, &input_token, error, output_token);
 					initial = FALSE;
 				} else {
-					result = net_client_smtp_execute(client, "%s", &input_token, error, output_token);
+					result = net_client_smtp_execute(client, "%s", 334, &input_token, error, output_token);
 				}
 			}
 			g_free(output_token);
@@ -670,7 +676,7 @@ net_client_smtp_auth_gssapi(NetClientSmtp *client, const gchar *user, GError **e
 		if (state == 1) {
 			output_token = net_client_gss_auth_finish(gss_ctx, input_token, error);
 			if (output_token != NULL) {
-			    result = net_client_smtp_execute(client, "%s", NULL, error, output_token);
+			    result = net_client_smtp_execute(client, "%s", 235, NULL, error, output_token);
 			    g_free(output_token);
 			}
 		}
@@ -702,10 +708,11 @@ net_client_smtp_auth_oauth2(NetClientSmtp *client, const gchar *user, const gcha
 	gboolean result;
 	gchar *base64_buf;
 
-	base64_buf = net_client_auth_oauth2_calc(user, access_token);
+	base64_buf = net_client_auth_oauth2_calc(user, NET_CLIENT(client), access_token);
 	if (base64_buf != NULL) {
-		result = net_client_smtp_execute(client, "AUTH XOAUTH2 %s", NULL, error, base64_buf);
-		// FIXME - grab the JSON response on error
+		/* RFC 4954, Sect. 6 requires status 235 */
+		result = net_client_smtp_execute(client, "AUTH OAUTHBEARER %s", 235, NULL, error, base64_buf);
+		// FIXME - grab the JSON response on error?
 		net_client_free_authstr(base64_buf);
 	} else {
 		result = FALSE;
@@ -730,7 +737,7 @@ net_client_smtp_auth_oauth2(NetClientSmtp G_GNUC_UNUSED *client, const gchar G_G
 
 /* note: if supplied, last_reply is never NULL on success */
 static gboolean
-net_client_smtp_execute(NetClientSmtp *client, const gchar *request_fmt, gchar **last_reply, GError **error, ...)
+net_client_smtp_execute(NetClientSmtp *client, const gchar *request_fmt, gint expect_code, gchar **last_reply, GError **error, ...)
 {
 	va_list args;
 	gboolean result;
@@ -740,7 +747,7 @@ net_client_smtp_execute(NetClientSmtp *client, const gchar *request_fmt, gchar *
 	va_end(args);
 
 	if (result) {
-		result = net_client_smtp_read_reply(client, -1, last_reply, error);
+		result = net_client_smtp_read_reply(client, expect_code, last_reply, error);
 	}
 
 	return result;
@@ -799,7 +806,7 @@ net_client_smtp_ehlo(NetClientSmtp *client, guint *auth_supported, gboolean *can
 							*auth_supported |= NET_CLIENT_SMTP_AUTH_GSSAPI;
 #endif
 #if defined (HAVE_OAUTH2)
-						} else if (strcmp(auth[n], "XOAUTH2") == 0) {
+						} else if (strcmp(auth[n], "OAUTHBEARER") == 0) {
 							*auth_supported |= NET_CLIENT_SMTP_AUTH_OAUTH2;
 #endif
 						} else {
@@ -828,55 +835,67 @@ net_client_smtp_ehlo(NetClientSmtp *client, guint *auth_supported, gboolean *can
 static gboolean
 net_client_smtp_read_reply(NetClientSmtp *client, gint expect_code, gchar **last_reply, GError **error)
 {
-	gint rescode;
 	gboolean done;
 	gboolean result;
 
 	done = FALSE;
-	rescode = expect_code;
 	do {
 		gchar *reply;
+		GError *this_error = NULL;
 
-		result = net_client_read_line(NET_CLIENT(client), &reply, error);
+		result = net_client_read_line(NET_CLIENT(client), &reply, &this_error);
 		if (result) {
 			gint this_rescode;
-			gchar *endptr;
 
-			this_rescode = strtol(reply, &endptr, 10);
-			if (rescode == -1) {
-				rescode = this_rescode;
-				result = net_client_smtp_eval_rescode(rescode, reply, error);
-			} else if (rescode != this_rescode) {
-				g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_PROTOCOL,
-					_("bad server reply: %s"), reply);
-				result = FALSE;
-			} else {
-				/* nothing to do (see MISRA C:2012, Rule 15.7) */
+			this_rescode = strtol(reply, NULL, 10);
+			result = net_client_smtp_eval_rescode(this_rescode, expect_code, reply, &this_error);
+
+			if (!result) {
+				if ((error != NULL) && (*error != NULL)) {
+					g_prefix_error(&this_error, "%s ", (*error)->message);
+					g_clear_error(error);
+				}
+				g_propagate_error(error, this_error);
 			}
+
+			if (expect_code == -1) {
+				expect_code = this_rescode;
+			}
+
 			if (reply[3] == ' ') {
 				done = TRUE;
 				if (last_reply != NULL) {
 					*last_reply = g_strdup(&reply[4]);
 				}
 			}
-
-			g_free(reply);
+		} else {
+			g_clear_error(error);
+			g_propagate_error(error, this_error);
+			done = TRUE;
 		}
-	} while (result && !done);
+
+		g_free(reply);
+	} while (!done);
 
 	return result;
 }
 
 
 static gboolean
-net_client_smtp_eval_rescode(gint res_code, const gchar *reply, GError **error)
+net_client_smtp_eval_rescode(gint res_code, gint expect_code, const gchar *reply, GError **error)
 {
 	gboolean result;
 
 	switch (res_code / 100) {
 	case 2:
 	case 3:
-		result = TRUE;
+		if ((expect_code == -1) || (res_code == expect_code)) {
+			result = TRUE;
+		} else {
+			g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_TRANSIENT,
+				_("unexpected reply: %s"), reply);
+			result = FALSE;
+		}
 		break;
 	case 4:
 		g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_TRANSIENT,

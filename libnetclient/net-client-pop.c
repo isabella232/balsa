@@ -52,7 +52,7 @@ struct _NetClientPop {
 #define NET_CLIENT_POP_AUTH_CRAM_SHA1		0x020U
 /** RFC 4752 "GSSAPI" authentication method. */
 #define NET_CLIENT_POP_AUTH_GSSAPI			0x040U
-/** RFC 6749 "XOAUTH2" authentication method. */
+/** RFC 7628 "OAUTHBEARER" authentication method. */
 #define NET_CLIENT_POP_AUTH_OAUTH2			0x080U
 /** RFC 4505 "ANONYMOUS" authentication method. */
 #define NET_CLIENT_POP_AUTH_ANONYMOUS		0x100U
@@ -252,7 +252,7 @@ net_client_pop_set_auth_mode(NetClientPop *client, NetClientAuthMode auth_mode, 
 		client->auth_enabled |= NET_CLIENT_POP_AUTH_GSSAPI;
 	}
 #endif
-#if defined (HAVE_OAUTH2)
+#if defined(HAVE_OAUTH2)
 	if ((auth_mode & NET_CLIENT_AUTH_OAUTH2) != 0U) {
 		client->auth_enabled |= NET_CLIENT_POP_AUTH_OAUTH2;
 	}
@@ -880,9 +880,9 @@ net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar 
 	gboolean result ;
 	gchar *base64_buf;
 
-	base64_buf = net_client_auth_oauth2_calc(user, access_token);
+	base64_buf = net_client_auth_oauth2_calc(user, NET_CLIENT(client), access_token);
 	if (base64_buf != NULL) {
-		result = net_client_pop_execute_sasl(client, "AUTH XOAUTH2", NULL, error);
+		result = net_client_pop_execute_sasl(client, "AUTH OAUTHBEARER", NULL, error);
 		if (result) {
 			result = net_client_pop_execute(client, "%s", NULL, error, base64_buf);
 			// FIXME - grab the JSON response on error
@@ -981,7 +981,7 @@ net_client_pop_get_capa(NetClientPop *client, guint *auth_supported)
 						*auth_supported |= NET_CLIENT_POP_AUTH_GSSAPI;
 #endif
 #if defined(HAVE_OAUTH2)
-					} else if (strcmp(auth[n], "XOAUTH2") == 0) {
+					} else if (strcmp(auth[n], "OAUTHBEARER") == 0) {
 						*auth_supported |= NET_CLIENT_POP_AUTH_OAUTH2;
 #endif
 					} else {
