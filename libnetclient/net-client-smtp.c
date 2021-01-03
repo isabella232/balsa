@@ -62,11 +62,18 @@ typedef struct {
 /** RFC 4752 "GSSAPI" authentication method. */
 #define NET_CLIENT_SMTP_AUTH_GSSAPI			0x20U
 /** RFC 7628 "OAUTHBEARER" authentication method. */
-#define NET_CLIENT_SMTP_AUTH_OAUTH2			0x40U
+#define NET_CLIENT_SMTP_AUTH_OAUTHBEARER	0x40U
+/** RFC 6749 "XOAUTH2" authentication method. */
+#define NET_CLIENT_SMTP_AUTH_XOAUTH2		0x80U
+
 
 /** Mask of all authentication methods requiring user name and password. */
 #define NET_CLIENT_SMTP_AUTH_PASSWORD		\
 	(NET_CLIENT_SMTP_AUTH_PLAIN | NET_CLIENT_SMTP_AUTH_LOGIN | NET_CLIENT_SMTP_AUTH_CRAM_MD5 | NET_CLIENT_SMTP_AUTH_CRAM_SHA1)
+
+/** Mask of OAuth2 authentication methods. */
+#define NET_CLIENT_SMTP_AUTH_OAUTH2			\
+	(NET_CLIENT_SMTP_AUTH_OAUTHBEARER | NET_CLIENT_SMTP_AUTH_XOAUTH2)
 
 /** Mask of all authentication methods. */
 #define NET_CLIENT_SMTP_AUTH_ALL			\
@@ -96,7 +103,8 @@ static gboolean net_client_smtp_auth_login(NetClientSmtp *client, const gchar *u
 static gboolean net_client_smtp_auth_cram(NetClientSmtp *client, GChecksumType chksum_type, const gchar *user, const gchar *passwd,
 										  GError **error);
 static gboolean net_client_smtp_auth_gssapi(NetClientSmtp *client, const gchar *user, GError **error);
-static gboolean net_client_smtp_auth_oauth2(NetClientSmtp *client, const gchar *user, const gchar *access_token, GError **error);
+static gboolean net_client_smtp_auth_oauth2(NetClientSmtp *client, const gchar *user, const gchar *access_token,
+											gboolean oauthbearer, GError **error);
 static gboolean net_client_smtp_read_reply(NetClientSmtp *client, gint expect_code, gchar **last_reply, GError **error);
 static gboolean net_client_smtp_eval_rescode(gint res_code, gint expect_code, const gchar *reply, GError **error);
 static gchar *net_client_smtp_dsn_to_string(const NetClientSmtp *client, NetClientSmtpDsnMode dsn_mode);
@@ -541,7 +549,8 @@ net_client_smtp_auth(NetClientSmtp *client, guint auth_supported, GError **error
 			g_set_error(error, NET_CLIENT_SMTP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_SMTP_NO_AUTH,
 				_("user name and access token required"));
 		} else {
-			result = net_client_smtp_auth_oauth2(client, auth_data[0], auth_data[1], error);
+			result = net_client_smtp_auth_oauth2(client, auth_data[0], auth_data[1],
+				(auth_mask & NET_CLIENT_SMTP_AUTH_OAUTHBEARER) == NET_CLIENT_SMTP_AUTH_OAUTHBEARER, error);
 		}
 	} else {
 		/* user name and password authentication methods */
@@ -703,15 +712,20 @@ net_client_smtp_auth_gssapi(NetClientSmtp G_GNUC_UNUSED *client, const gchar G_G
 #if defined(HAVE_OAUTH2)
 
 static gboolean
-net_client_smtp_auth_oauth2(NetClientSmtp *client, const gchar *user, const gchar *access_token, GError **error)
+net_client_smtp_auth_oauth2(NetClientSmtp *client, const gchar *user, const gchar *access_token, gboolean oauthbearer,
+	GError **error)
 {
 	gboolean result;
 	gchar *base64_buf;
 
-	base64_buf = net_client_auth_oauth2_calc(user, NET_CLIENT(client), access_token);
+	base64_buf = net_client_auth_oauth2_calc(user, oauthbearer, NET_CLIENT(client), access_token);
 	if (base64_buf != NULL) {
 		/* RFC 4954, Sect. 6 requires status 235 */
-		result = net_client_smtp_execute(client, "AUTH OAUTHBEARER %s", 235, NULL, error, base64_buf);
+		if (oauthbearer) {
+			result = net_client_smtp_execute(client, "AUTH OAUTHBEARER %s", 235, NULL, error, base64_buf);
+		} else {
+			result = net_client_smtp_execute(client, "AUTH XOAUTH2 %s", 235, NULL, error, base64_buf);
+		}
 		// FIXME - grab the JSON response on error?
 		net_client_free_authstr(base64_buf);
 	} else {
@@ -807,7 +821,9 @@ net_client_smtp_ehlo(NetClientSmtp *client, guint *auth_supported, gboolean *can
 #endif
 #if defined (HAVE_OAUTH2)
 						} else if (strcmp(auth[n], "OAUTHBEARER") == 0) {
-							*auth_supported |= NET_CLIENT_SMTP_AUTH_OAUTH2;
+							*auth_supported |= NET_CLIENT_SMTP_AUTH_OAUTHBEARER;
+						} else if (strcmp(auth[n], "XOAUTH2") == 0) {
+							*auth_supported |= NET_CLIENT_SMTP_AUTH_XOAUTH2;
 #endif
 						} else {
 							/* other auth methods are ignored for the time being */

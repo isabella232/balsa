@@ -224,7 +224,7 @@ imap_auth_anonymous(ImapMboxHandle* handle)
 
 
 /* =================================================================== */
-/* SASL OAUTHBEARER (RFC 7628)                                         */
+/* SASL XOAUTH2 (RFC 6749) or OAUTHBEARER (RFC 7628)                   */
 /* =================================================================== */
 
 #if defined(HAVE_OAUTH2)
@@ -238,7 +238,8 @@ getmsg_oauth2(ImapMboxHandle *h, char **retmsg, int *retmsglen)
 	if ((auth_data == NULL) || (auth_data[0] == NULL) || (auth_data[1] == NULL)) {
 		result = FALSE;
 	} else {
-		*retmsg = net_client_auth_oauth2_calc(auth_data[0], NET_CLIENT(h->sio), auth_data[1]);
+		*retmsg = net_client_auth_oauth2_calc(auth_data[0], imap_mbox_handle_can_do(h, IMCAP_AOAUTHBEARER) != 0,
+			NET_CLIENT(h->sio), auth_data[1]);
 		*retmsglen = strlen(*retmsg);
 		result = TRUE;
 	}
@@ -253,7 +254,11 @@ getmsg_oauth2(ImapMboxHandle *h, char **retmsg, int *retmsglen)
 static ImapResult
 imap_auth_oauth2(ImapMboxHandle* handle)
 {
-	return imap_auth_sasl(handle, IMCAP_AOAUTH2, "AUTHENTICATE OAUTHBEARER", getmsg_oauth2);
+	if (imap_mbox_handle_can_do(handle, IMCAP_AOAUTHBEARER) != 0) {
+		return imap_auth_sasl(handle, IMCAP_AOAUTHBEARER, "AUTHENTICATE OAUTHBEARER", getmsg_oauth2);
+	} else {
+		return imap_auth_sasl(handle, IMCAP_AXOAUTH2, "AUTHENTICATE XOAUTH2", getmsg_oauth2);
+	}
 }
 
 #else

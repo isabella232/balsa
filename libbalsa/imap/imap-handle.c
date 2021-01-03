@@ -2107,7 +2107,7 @@ ir_capability_data(ImapMboxHandle *handle)
   /* ordered identically as ImapCapability constants */
   static const char* capabilities[] = {
     "IMAP4", "IMAP4rev1", "STATUS",
-    "AUTH=ANONYMOUS", "AUTH=CRAM-MD5", "AUTH=GSSAPI", "AUTH=PLAIN", "AUTH=OAUTHBEARER",
+    "AUTH=ANONYMOUS", "AUTH=CRAM-MD5", "AUTH=GSSAPI", "AUTH=PLAIN", "AUTH=XOAUTH2", "AUTH=OAUTHBEARER",
     "ACL", "RIGHTS=", "BINARY", "CHILDREN",
     "COMPRESS=DEFLATE",
     "ESEARCH", "IDLE", "LITERAL+",
@@ -4489,7 +4489,8 @@ imap_server_probe(const gchar *host, guint timeout_secs, NetClientProbeResult *r
 				if (imap_mbox_handle_can_do(handle, IMCAP_AGSSAPI) != 0) {
 					result->auth_mode |= NET_CLIENT_AUTH_KERBEROS;
 				}
-				if (imap_mbox_handle_can_do(handle, IMCAP_AOAUTH2) != 0) {
+				if ((imap_mbox_handle_can_do(handle, IMCAP_AXOAUTH2) != 0) ||
+					(imap_mbox_handle_can_do(handle, IMCAP_AOAUTHBEARER) != 0)) {
 					result->auth_mode |= NET_CLIENT_AUTH_OAUTH2;
 				}
 				retval = TRUE;

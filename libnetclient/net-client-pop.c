@@ -53,15 +53,21 @@ struct _NetClientPop {
 /** RFC 4752 "GSSAPI" authentication method. */
 #define NET_CLIENT_POP_AUTH_GSSAPI			0x040U
 /** RFC 7628 "OAUTHBEARER" authentication method. */
-#define NET_CLIENT_POP_AUTH_OAUTH2			0x080U
+#define NET_CLIENT_POP_AUTH_OAUTHBEARER		0x080U
+/** RFC 6749 "XOAUTH2" authentication method. */
+#define NET_CLIENT_POP_AUTH_XOAUTH2			0x100U
 /** RFC 4505 "ANONYMOUS" authentication method. */
-#define NET_CLIENT_POP_AUTH_ANONYMOUS		0x100U
+#define NET_CLIENT_POP_AUTH_ANONYMOUS		0x200U
 
 
 /** Mask of all authentication methods requiring user name and password. */
 #define NET_CLIENT_POP_AUTH_PASSWORD		\
 	(NET_CLIENT_POP_AUTH_USER_PASS | NET_CLIENT_POP_AUTH_APOP | NET_CLIENT_POP_AUTH_LOGIN | NET_CLIENT_POP_AUTH_PLAIN | \
 	 NET_CLIENT_POP_AUTH_CRAM_MD5 | NET_CLIENT_POP_AUTH_CRAM_SHA1)
+
+/** Mask of OAuth2 authentication methods. */
+#define NET_CLIENT_POP_AUTH_OAUTH2			\
+	(NET_CLIENT_POP_AUTH_OAUTHBEARER | NET_CLIENT_POP_AUTH_XOAUTH2)
 
 /** Mask of all authentication methods. */
 #define NET_CLIENT_POP_AUTH_ALL				\
@@ -103,9 +109,10 @@ static gboolean net_client_pop_auth_anonymous(NetClientPop *client, GError **err
 static gboolean net_client_pop_auth_user_pass(NetClientPop *client, const gchar* user, const gchar* passwd, GError** error);
 static gboolean net_client_pop_auth_apop(NetClientPop *client, const gchar* user, const gchar* passwd, GError** error);
 static gboolean net_client_pop_auth_cram(NetClientPop *client, GChecksumType chksum_type, const gchar *user, const gchar *passwd,
-										  GError **error);
+										 GError **error);
 static gboolean net_client_pop_auth_gssapi(NetClientPop *client, const gchar *user, GError **error);
-static gboolean net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar *access_token, GError **error);
+static gboolean net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar *access_token, gboolean oauthbearer,
+										   GError **error);
 static gboolean net_client_pop_retr_msg(NetClientPop *client, const NetClientPopMessageInfo *info, NetClientPopMsgCb callback,
 										gpointer user_data, GError **error);
 
@@ -649,7 +656,8 @@ net_client_pop_auth(NetClientPop *client, guint auth_supported, GError **error)
 			g_set_error(error, NET_CLIENT_POP_ERROR_QUARK, (gint) NET_CLIENT_ERROR_POP_NO_AUTH,
 				_("user name and access token required"));
 		} else {
-			result = net_client_pop_auth_oauth2(client, auth_data[0], auth_data[1], error);
+			result = net_client_pop_auth_oauth2(client, auth_data[0], auth_data[1],
+				(auth_mask & NET_CLIENT_POP_AUTH_OAUTHBEARER) == NET_CLIENT_POP_AUTH_OAUTHBEARER, error);
 		}
 	} else {
 		/* user name and password authentication methods */
@@ -875,14 +883,18 @@ net_client_pop_auth_gssapi(NetClientPop G_GNUC_UNUSED *client, const gchar G_GNU
 #if defined(HAVE_OAUTH2)
 
 static gboolean
-net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar *access_token, GError **error)
+net_client_pop_auth_oauth2(NetClientPop *client, const gchar *user, const gchar *access_token, gboolean oauthbearer, GError **error)
 {
 	gboolean result ;
 	gchar *base64_buf;
 
-	base64_buf = net_client_auth_oauth2_calc(user, NET_CLIENT(client), access_token);
+	base64_buf = net_client_auth_oauth2_calc(user, oauthbearer, NET_CLIENT(client), access_token);
 	if (base64_buf != NULL) {
-		result = net_client_pop_execute_sasl(client, "AUTH OAUTHBEARER", NULL, error);
+		if (oauthbearer) {
+			result = net_client_pop_execute_sasl(client, "AUTH OAUTHBEARER", NULL, error);
+		} else {
+			result = net_client_pop_execute_sasl(client, "AUTH XOAUTH2", NULL, error);
+		}
 		if (result) {
 			result = net_client_pop_execute(client, "%s", NULL, error, base64_buf);
 			// FIXME - grab the JSON response on error
@@ -982,7 +994,9 @@ net_client_pop_get_capa(NetClientPop *client, guint *auth_supported)
 #endif
 #if defined(HAVE_OAUTH2)
 					} else if (strcmp(auth[n], "OAUTHBEARER") == 0) {
-						*auth_supported |= NET_CLIENT_POP_AUTH_OAUTH2;
+						*auth_supported |= NET_CLIENT_POP_AUTH_OAUTHBEARER;
+					} else if (strcmp(auth[n], "XOAUTH2") == 0) {
+						*auth_supported |= NET_CLIENT_POP_AUTH_XOAUTH2;
 #endif
 					} else {
 						/* other auth methods are ignored for the time being (see MISRA C:2012, Rule 15.7) */
