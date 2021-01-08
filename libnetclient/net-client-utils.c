@@ -391,7 +391,7 @@ net_client_auth_oauth2_calc(const gchar *user, gboolean rfc7628mode, NetClient *
 		buffer = g_strdup_printf("user=%s\001auth=Bearer %s\001\001", user, access_token);
 	}
 	g_debug("%s: '%s'", __func__, buffer);
-	result = g_base64_encode(buffer, strlen(buffer));
+	result = g_base64_encode((const guchar *) buffer, strlen(buffer));
 	g_free(buffer);
 	return result;
 }
