@@ -304,6 +304,8 @@ libbalsa_mailbox_imap_dispose(GObject * object)
     }
 
     if (mimap->expunged_idle_id != 0) {
+        /* Should have been removed at close time, but to be on the safe
+         * side: */
         g_source_remove(mimap->expunged_idle_id);
         mimap->expunged_idle_id = 0;
     }
@@ -1207,6 +1209,10 @@ libbalsa_mailbox_imap_close(LibBalsaMailbox * mailbox, gboolean expunge)
     }
     clean_cache(mailbox);
 
+    if (mimap->expunged_idle_id != 0) {
+        g_source_remove(mimap->expunged_idle_id);
+        mimap->expunged_idle_id = 0;
+    }
 
     free_messages_info(mimap);
     libbalsa_mailbox_imap_release_handle(mimap);

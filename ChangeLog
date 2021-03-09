@@ -1,5 +1,15 @@
 2021-03-08  Peter Bloomfield  <pbloomfield@bellsouth.net>
 
+	Remove a scheduled idle callback at close time instead of at
+	dispose time.
+
+	* libbalsa/mailbox_imap.c
+	  (libbalsa_mailbox_imap_close): remove expunged idle source, if any;
+	  (libbalsa_mailbox_imap_dispose): comment that it should have
+	    been removed at close time.
+
+2021-03-08  Peter Bloomfield  <pbloomfield@bellsouth.net>
+
 	Handle expunged IMAP messages in an idle callback
 
 	* libbalsa/mailbox_imap.c: add an array of expunged messages and
