@@ -1,3 +1,12 @@
+2021-03-09  Peter Bloomfield  <pbloomfield@bellsouth.net>
+
+	Try to avoid critical messages
+
+	* libbalsa/mailbox_imap.c
+	  (imap_expunge_idle): handle expunged messages in the order
+	    they are expunged;
+	  (libbalsa_mailbox_imap_fetch_headers): avoid a critical message.
+
 2021-03-08  Peter Bloomfield  <pbloomfield@bellsouth.net>
 
 	Remove a scheduled idle callback at close time instead of at

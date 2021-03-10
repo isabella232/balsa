@@ -908,11 +908,8 @@ imap_expunge_idle(gpointer user_data)
 
     libbalsa_lock_mailbox(mailbox);
 
-    /* Process the expunged messages in reverse order, so that each
-     * seqno points to the correct msg_info. */
-    g_array_sort(mimap->expunged_seqnos, cmp_msgno);
-    for (j = mimap->expunged_seqnos->len; j > 0; --j) {
-        guint seqno = g_array_index(mimap->expunged_seqnos, guint, j - 1);
+    for (j = 0; j < mimap->expunged_seqnos->len; j++) {
+        guint seqno = g_array_index(mimap->expunged_seqnos, guint, j);
         struct message_info *msg_info;
         guint i;
 
@@ -2331,6 +2328,10 @@ libbalsa_mailbox_imap_fetch_headers(LibBalsaMailbox *mailbox,
     glong msgno;
 
     msgno = libbalsa_message_get_msgno(message);
+    /* If message numbers are out of sync with the mail store,
+     * just skip the message: */
+    if (msgno > imap_mbox_handle_get_exists(mimap->handle))
+        return;
 
     II(rc,mimap->handle,
        imap_mbox_handle_fetch_range(mimap->handle, msgno, msgno,
